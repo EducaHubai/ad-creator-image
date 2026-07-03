@@ -1,5 +1,11 @@
-node_modules
-dist
+node_modules/
+dist/
 .env
 .env.local
 *.local
+.DS_Store
+**/.DS_Store
+**/.thumbnail
+EDUCA EDTECH Group Design System/uploads/
+EDUCA EDTECH Group Design System/scraps/
+EDUCA EDTECH Group Design System/_tmp/
