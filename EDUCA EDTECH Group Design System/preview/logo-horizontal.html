@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Brand" name="Logo · Horizontal (priority)" subtitle="Positive on white · negative on #202020" viewport="700x220" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Logo — Horizontal</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 0; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; min-height: 200px; }
+  .cell { display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .cell.dark { background: #202020; }
+  img { max-width: 90%; height: auto; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="cell"><img src="../assets/logo-horizontal.svg" alt="EDUCA EDTECH Group"></div>
+    <div class="cell dark"><img src="../assets/logo-horizontal-negative.svg" alt="EDUCA EDTECH Group negative"></div>
+  </div>
+</body>
+</html>

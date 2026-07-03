@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Colors" name="Color · Semantic (light)" subtitle="–bg, –fg, –accent, –link tokens" viewport="700x230" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Semantic — Light</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 20px; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .tok { border-radius: 10px; padding: 12px; min-height: 76px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: inset 0 0 0 1px rgba(32,32,32,0.08); }
+  .name { font-family: "Lato", sans-serif; font-weight: 700; font-size: 12px; }
+  .role { font-size: 11px; color: #666; }
+  .chip { width: 100%; height: 18px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="tok"><div class="chip" style="background:#fff;box-shadow:inset 0 0 0 1px #E0E0E0"></div><div><div class="name">--bg</div><div class="role">surface</div></div></div>
+    <div class="tok"><div class="chip" style="background:#202020"></div><div><div class="name">--fg</div><div class="role">text</div></div></div>
+    <div class="tok"><div class="chip" style="background:#666666"></div><div><div class="name">--fg-muted</div><div class="role">2° text</div></div></div>
+    <div class="tok"><div class="chip" style="background:#963058"></div><div><div class="name">--accent</div><div class="role">burdeos</div></div></div>
+    <div class="tok"><div class="chip" style="background:#60BFB8"></div><div><div class="name">--accent-2</div><div class="role">teal</div></div></div>
+    <div class="tok"><div class="chip" style="background:#2E7ABE"></div><div><div class="name">--link</div><div class="role">links</div></div></div>
+    <div class="tok"><div class="chip" style="background:#60BFB8"></div><div><div class="name">--success</div><div class="role">teal</div></div></div>
+    <div class="tok"><div class="chip" style="background:#963058"></div><div><div class="name">--danger</div><div class="role">burdeos</div></div></div>
+  </div>
+</body>
+</html>

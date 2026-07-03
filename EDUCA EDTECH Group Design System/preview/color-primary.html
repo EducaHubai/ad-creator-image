@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Colors" name="Color · Primary" subtitle="Negro corporativo #202020 + White" viewport="700x180" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Color — Primary</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 24px; background: #fff; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+  .swatch {
+    border-radius: 12px; padding: 20px; min-height: 116px; display: flex; flex-direction: column; justify-content: space-between;
+    box-shadow: 0 2px 8px rgba(32,32,32,0.06);
+  }
+  .swatch.black { background: #202020; color: #fff; }
+  .swatch.white { background: #fff; color: #202020; border: 1px solid #E0E0E0; }
+  .label { font-family: "Rubik", sans-serif; font-weight: 500; font-size: 18px; }
+  .role { font-family: "Lato", sans-serif; font-size: 13px; opacity: 0.75; }
+  .hex { font-family: "Lato", sans-serif; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="swatch black">
+      <div>
+        <div class="label">Negro corporativo</div>
+        <div class="role">All text · dark surfaces · never #000</div>
+      </div>
+      <div class="hex">#202020</div>
+    </div>
+    <div class="swatch white">
+      <div>
+        <div class="label">White</div>
+        <div class="role">Default surface · text on dark</div>
+      </div>
+      <div class="hex">#FFFFFF</div>
+    </div>
+  </div>
+</body>
+</html>

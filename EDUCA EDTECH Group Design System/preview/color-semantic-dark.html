@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Colors" name="Color · Semantic (dark)" subtitle="#202020 surface · teal-led accents" viewport="700x230" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Semantic — Dark</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 20px; background: #202020; font-family: "Lato", sans-serif; color: #fff; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .tok { border-radius: 10px; padding: 12px; min-height: 76px; display: flex; flex-direction: column; justify-content: space-between; background: #2A2A2A; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
+  .name { font-family: "Lato", sans-serif; font-weight: 700; font-size: 12px; }
+  .role { font-size: 11px; color: #BABABA; }
+  .chip { width: 100%; height: 18px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="tok"><div class="chip" style="background:#202020;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.15)"></div><div><div class="name">--bg</div><div class="role">surface</div></div></div>
+    <div class="tok"><div class="chip" style="background:#fff"></div><div><div class="name">--fg</div><div class="role">text</div></div></div>
+    <div class="tok"><div class="chip" style="background:#BABABA"></div><div><div class="name">--fg-muted</div><div class="role">2° text</div></div></div>
+    <div class="tok"><div class="chip" style="background:#60BFB8"></div><div><div class="name">--accent</div><div class="role">teal lead</div></div></div>
+    <div class="tok"><div class="chip" style="background:#E96A73"></div><div><div class="name">--accent-2</div><div class="role">coral</div></div></div>
+    <div class="tok"><div class="chip" style="background:#60BFB8"></div><div><div class="name">--link</div><div class="role">teal</div></div></div>
+    <div class="tok"><div class="chip" style="background:#3A3A3A"></div><div><div class="name">--border</div><div class="role">hairline</div></div></div>
+    <div class="tok"><div class="chip" style="background:linear-gradient(90deg,#60BFB8,#2E7ABE,#244A80,#963058,#E96A73)"></div><div><div class="name">--ee-gradient</div><div class="role">accent</div></div></div>
+  </div>
+</body>
+</html>

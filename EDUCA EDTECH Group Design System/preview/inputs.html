@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Components" name="Inputs" subtitle="Underline-only · floating label · teal focus · burdeos error" viewport="700x260" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Inputs</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 22px; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px 28px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .lab { font-family: "Lato", sans-serif; font-size: 11px; color: #666; }
+  .lab.focus { color: #60BFB8; }
+  .lab.error { color: #963058; }
+  .input { background: transparent; border: 0; border-bottom: 1.5px solid #BABABA; padding: 6px 0; font-family: "Lato", sans-serif; font-size: 16px; color: #202020; }
+  .input.focus { border-bottom-color: #60BFB8; }
+  .input.error { border-bottom-color: #963058; }
+  .helper { font-size: 11px; color: #963058; }
+  .meta { font-size: 10px; color: #666; letter-spacing: 0.06em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="field">
+      <span class="lab">Nombre *</span>
+      <div class="input">María</div>
+      <span class="meta">Default</span>
+    </div>
+    <div class="field">
+      <span class="lab focus">Nombre *</span>
+      <div class="input focus">María</div>
+      <span class="meta">Focus · teal</span>
+    </div>
+    <div class="field">
+      <span class="lab">Nombre *</span>
+      <div class="input" style="color:#BABABA">Placeholder</div>
+      <span class="meta">Empty</span>
+    </div>
+    <div class="field">
+      <span class="lab error">Nombre *</span>
+      <div class="input error"></div>
+      <span class="helper">El nombre es obligatorio.</span>
+    </div>
+  </div>
+</body>
+</html>

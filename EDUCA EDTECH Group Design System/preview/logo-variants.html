@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Brand" name="Logo · Square + endorsement" subtitle="Square · By EDUCA vertical · By EDUCA negative" viewport="700x220" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Logo — Square + endorsement</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 0; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; min-height: 200px; }
+  .cell { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 18px; gap: 8px; }
+  .cell.dark { background: #202020; color: #fff; }
+  img { max-width: 80%; max-height: 110px; }
+  .lab { font-size: 10px; color: #666; letter-spacing: 0.08em; text-transform: uppercase; }
+  .cell.dark .lab { color: #BABABA; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="cell"><img src="../assets/logo-square.svg" alt="Square"><div class="lab">Square</div></div>
+    <div class="cell"><img src="../assets/by-educa-vertical.svg" alt="By EDUCA · vertical"><div class="lab">By · vertical</div></div>
+    <div class="cell dark"><img src="../assets/by-educa-horizontal-negative.svg" alt="By EDUCA · horizontal neg"><div class="lab">By · horizontal neg</div></div>
+  </div>
+</body>
+</html>

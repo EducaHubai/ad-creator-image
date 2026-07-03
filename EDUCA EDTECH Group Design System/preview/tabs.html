@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Components" name="Tabs" subtitle="Active tab marked by full brand-gradient indicator" viewport="700x160" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tabs</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 26px; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .row { display: flex; gap: 28px; align-items: flex-end; border-bottom: 1px solid #E0E0E0; padding-bottom: 0; position: relative; }
+  .tab { font-family: "Lato", sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 0.04em; padding: 10px 4px; color: #BABABA; position: relative; }
+  .tab.active { color: #202020; }
+  .tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); }
+  .panel { padding-top: 22px; font-size: 13px; color: #666; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="tab active">Educación superior</div>
+    <div class="tab">Educación continua</div>
+    <div class="tab">Oposiciones</div>
+    <div class="tab">EdTech</div>
+  </div>
+  <div class="panel">Active indicator uses the full brand gradient. 200ms slide on tab change.</div>
+</body>
+</html>

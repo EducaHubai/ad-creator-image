@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Brand" name="Gradient line motif" subtitle="3px under titles · 6px on slide bottoms" viewport="700x280" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gradient line motif</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 22px; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .stack { display: flex; flex-direction: column; gap: 18px; }
+  .demo { background: #fff; box-shadow: 0 2px 8px rgba(32,32,32,0.06); border-radius: 10px; overflow: hidden; }
+  .grad { height: 3px; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); }
+  .grad-thick { height: 6px; }
+  .pad { padding: 14px 18px; }
+  .eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #963058; }
+  .title { font-family: "Rubik", sans-serif; font-weight: 500; font-size: 18px; margin-top: 4px; }
+  .meta { font-size: 11px; color: #666; }
+  .dark-demo { background: #202020; color: #fff; padding: 18px; border-radius: 10px; }
+</style>
+</head>
+<body>
+  <div class="stack">
+    <div class="demo">
+      <div class="grad"></div>
+      <div class="pad">
+        <div class="eyebrow">Section header</div>
+        <div class="title">Thin gradient bar (3px) caps the section.</div>
+      </div>
+    </div>
+    <div class="dark-demo">
+      <div class="title" style="color:#fff">Slide bottom bar — full-width 6px</div>
+      <div class="meta" style="color:#BABABA">Used flush at the bottom of every content slide.</div>
+      <div class="grad grad-thick" style="margin-top:14px;border-radius:2px"></div>
+    </div>
+  </div>
+</body>
+</html>

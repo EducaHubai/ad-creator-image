@@ -1,0 +1,52 @@
+#60BFB8	#BABABA #2E7ABE #244A80	#000000 #963058 #E96A73 #FFE6E8
+Guía de Eslos
+Colores
+Degradado de colores
+Colores Secundarios
+Botones largos Botones cortos (Estácos) Botones cortos (Hover)
+Estáco
+Estáco
+Estáco
+Hover
+Hover
+Hover
+Color Principal
+Tipograa
+Colores
+Otros componentes
+Iconos
+Botones
+Input
+Text Line
+TAB
+AaLato Regular
+AaLato Bold
+AaRubik Medium
+Títulos Textos
+Lato Bold - 60 px
+Lato Bold - 24 px
+Rubik Medium - 26 px
+Rubik Regular - 22 px
+Lato Bold - 18 px
+Lato Regular - 18 px
+Mensaje
+DEFAULT
+DEFAULT DEFAULT DEFAULT DEFAULT
+DEFAULT
+DEFAULT
+Nombre *
+Quiénes somos Quiénes somos
+Nombre *
+Nombre *
+Nombre *
+El nombre es obligatorio.
+Mensaje
+EDUCACIÓN
+SUPERIOR
+EDUCACIÓN
+CONTINUA
+Y OPOSICIONES
+María
+
+-- 1 of 1 --
+

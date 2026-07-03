@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Colors" name="Color · Neutrals" subtitle="White · Soft · Border · Icon gray · Text 2°" viewport="700x200" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neutrals</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 24px; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .sw { border-radius: 10px; aspect-ratio: 1 / 1; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: inset 0 0 0 1px rgba(32,32,32,0.06); }
+  .name { font-family: "Rubik", sans-serif; font-weight: 500; font-size: 12px; line-height: 1.2; }
+  .hex { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.65; }
+  .light { color: #202020; }
+  .dark { color: #fff; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="sw light" style="background:#FFFFFF"><div class="name">White</div><div class="hex">#FFFFFF</div></div>
+    <div class="sw light" style="background:#F4F4F4"><div class="name">Soft</div><div class="hex">#F4F4F4</div></div>
+    <div class="sw light" style="background:#E0E0E0"><div class="name">Border</div><div class="hex">#E0E0E0</div></div>
+    <div class="sw light" style="background:#BABABA"><div class="name">Icon gray</div><div class="hex">#BABABA</div></div>
+    <div class="sw dark" style="background:#666666"><div class="name">Text 2°</div><div class="hex">#666666</div></div>
+  </div>
+</body>
+</html>

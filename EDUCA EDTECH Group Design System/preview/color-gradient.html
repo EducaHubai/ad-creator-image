@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Colors" name="Color · Signature gradient" subtitle="Teal → Azul → Burdeos → Coral · 0 25 50 80 100%" viewport="700x230" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Brand Gradient</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 24px; background: #fff; font-family: "Lato", sans-serif; color: #202020; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+  .full { height: 80px; border-radius: 10px; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); }
+  .line { height: 3px; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); }
+  .stops { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; font-size: 11px; }
+  .stop { display: flex; flex-direction: column; gap: 4px; }
+  .dot { height: 16px; border-radius: 4px; }
+  .label { font-family: "Rubik", sans-serif; font-weight: 500; font-size: 13px; }
+  .stop small { color: #666; letter-spacing: 0.06em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  <div class="stack">
+    <div class="full"></div>
+    <div class="stops">
+      <div class="stop"><div class="dot" style="background:#60BFB8"></div><div class="label">Teal</div><small>0%</small></div>
+      <div class="stop"><div class="dot" style="background:#2E7ABE"></div><div class="label">Azul m.</div><small>25%</small></div>
+      <div class="stop"><div class="dot" style="background:#244A80"></div><div class="label">Azul o.</div><small>50%</small></div>
+      <div class="stop"><div class="dot" style="background:#963058"></div><div class="label">Burdeos</div><small>80%</small></div>
+      <div class="stop"><div class="dot" style="background:#E96A73"></div><div class="label">Coral</div><small>100%</small></div>
+    </div>
+    <div class="line"></div>
+  </div>
+</body>
+</html>

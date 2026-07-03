@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Slides" name="Slides · Sample deck (8 slides)" subtitle="Cover · section · content · stats · image · quote · institutions · closing" viewport="1280x720" -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EDUCA EDTECH Group — Slide deck</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<script src="./deck-stage.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+  :root {
+    --slide-w: 1920px;
+    --slide-h: 1080px;
+  }
+  html, body { margin: 0; padding: 0; background: #0c0c0c; }
+  deck-stage { --slide-w: 1920px; --slide-h: 1080px; }
+  section.slide {
+    width: 1920px;
+    height: 1080px;
+    position: relative;
+    overflow: hidden;
+    background: #fff;
+    color: #202020;
+    font-family: "Lato", "Calibri", sans-serif;
+    box-sizing: border-box;
+  }
+  /* Universal bottom gradient bar — appears on every content slide */
+  .bottom-grad {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 12px;
+    background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%);
+  }
+  /* Top-right small logo on content slides */
+  .corner-logo {
+    position: absolute; top: 56px; right: 64px;
+    height: 48px;
+  }
+  .corner-logo img { height: 100%; width: auto; }
+  /* The slide-padding container */
+  .slide-pad {
+    padding: 96px 120px;
+    box-sizing: border-box;
+    height: 100%;
+    display: flex; flex-direction: column;
+  }
+  .eyebrow {
+    font-family: "Lato", sans-serif; font-weight: 700;
+    font-size: 22px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: #963058;
+  }
+  .slide-title {
+    font-family: "Rubik", sans-serif; font-weight: 500;
+    font-size: 76px; line-height: 1.05;
+    letter-spacing: -0.005em;
+    margin: 24px 0 16px;
+    text-wrap: pretty;
+  }
+  .slide-subtitle {
+    font-family: "Rubik", sans-serif; font-weight: 400;
+    font-size: 32px; color: #963058;
+    line-height: 1.3;
+  }
+  .slide-body { font-size: 30px; line-height: 1.5; max-width: 1200px; }
+  .slide-bullets { font-size: 26px; line-height: 1.55; display: flex; flex-direction: column; gap: 18px; padding: 0; margin: 0; list-style: none; }
+  .slide-bullets li { display: flex; gap: 18px; align-items: flex-start; }
+  .slide-bullets li::before {
+    content: ""; width: 14px; height: 14px; margin-top: 16px;
+    background: #60BFB8; transform: skewX(-20deg); flex-shrink: 0;
+  }
+  .gradient-line { height: 3px; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); border: 0; width: 220px; margin: 0; }
+</style>
+</head>
+<body>
+  <deck-stage>
+
+    <!-- 01 COVER — full dark, isologo + slogan -->
+    <section class="slide" data-screen-label="01 Cover" style="background:#202020;color:#fff">
+      <div style="position:absolute;top:96px;left:120px">
+        <img src="../assets/logo-horizontal-negative.svg" alt="EDUCA EDTECH Group" style="height:84px">
+      </div>
+      <div style="position:absolute;left:120px;bottom:200px;max-width:1400px">
+        <hr class="gradient-line" style="margin-bottom:40px">
+        <div style="font-family:Rubik;font-weight:500;font-size:120px;line-height:1.02;letter-spacing:-0.01em">Together our future<br>is bright.</div>
+        <div style="font-family:Lato;font-size:30px;color:#BABABA;margin-top:40px;max-width:1100px">El grupo educativo que lleva la educación online a todos los rincones del mundo.</div>
+      </div>
+      <div class="bottom-grad"></div>
+    </section>
+
+    <!-- 02 SECTION DIVIDER — full black, big white title -->
+    <section class="slide" data-screen-label="02 Section divider" style="background:#202020;color:#fff">
+      <div class="slide-pad" style="justify-content:center;align-items:flex-start;padding:120px">
+        <div class="eyebrow" style="color:#60BFB8">01 — Filosofía</div>
+        <hr class="gradient-line" style="margin:40px 0">
+        <div style="font-family:Rubik;font-weight:500;font-size:140px;line-height:1.0;letter-spacing:-0.015em">Mirando hacia<br>el futuro.</div>
+      </div>
+      <div class="bottom-grad"></div>
+    </section>
+
+    <!-- 03 CONTENT — title + bullets + corner logo -->
+    <section class="slide" data-screen-label="03 Values">
+      <div class="corner-logo"><img src="../assets/logo-horizontal.svg" alt=""></div>
+      <div class="slide-pad">
+        <div class="eyebrow">Nuestros valores</div>
+        <h1 class="slide-title">Una misma manera<br>de entender la educación.</h1>
+        <hr class="gradient-line" style="margin:8px 0 56px">
+        <ul class="slide-bullets">
+          <li><div><strong style="font-family:Rubik;font-weight:500;font-size:32px">Responsabilidad.</strong> Compromiso con el alumnado, con la calidad de la formación y con la aplicación de la tecnología.</div></li>
+          <li><div><strong style="font-family:Rubik;font-weight:500;font-size:32px">Honestidad.</strong> Integridad, transparencia y cercanía en cada proceso del grupo.</div></li>
+          <li><div><strong style="font-family:Rubik;font-weight:500;font-size:32px">Excelencia.</strong> Profesionalidad y experiencia para una enseñanza de calidad.</div></li>
+          <li><div><strong style="font-family:Rubik;font-weight:500;font-size:32px">Respeto.</strong> Al entorno y a las personas implicadas en la actividad del grupo.</div></li>
+        </ul>
+      </div>
+      <div class="bottom-grad"></div>
+    </section>
+
+    <!-- 04 BIG STAT — split layout -->
+    <section class="slide" data-screen-label="04 Big stat">
+      <div class="corner-logo"><img src="../assets/logo-horizontal.svg" alt=""></div>
+      <div class="slide-pad" style="display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:center;padding:140px 120px 160px">
+        <div>
+          <div class="eyebrow">Reconocimientos &amp; rankings</div>
+          <h1 class="slide-title" style="margin-top:18px">Avalado por entidades acreditadoras internacionales.</h1>
+          <hr class="gradient-line" style="margin-top:32px">
+          <p class="slide-body" style="margin-top:32px;color:#666">EDUCA EDTECH Group cuenta con la metodología y tecnología propias utilizadas por más de 30 universidades y por reconocidas instituciones educativas de todo el mundo.</p>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+          <div style="background:#F4F4F4;border-radius:16px;padding:36px 32px">
+            <div style="font-family:Rubik;font-weight:500;font-size:88px;color:#963058;line-height:1">20+</div>
+            <div style="font-size:22px;color:#666;margin-top:8px">años de experiencia</div>
+          </div>
+          <div style="background:#F4F4F4;border-radius:16px;padding:36px 32px">
+            <div style="font-family:Rubik;font-weight:500;font-size:88px;color:#244A80;line-height:1">30+</div>
+            <div style="font-size:22px;color:#666;margin-top:8px">universidades</div>
+          </div>
+          <div style="background:#F4F4F4;border-radius:16px;padding:36px 32px">
+            <div style="font-family:Rubik;font-weight:500;font-size:88px;color:#60BFB8;line-height:1">15</div>
+            <div style="font-size:22px;color:#666;margin-top:8px">instituciones de formación</div>
+          </div>
+          <div style="background:#F4F4F4;border-radius:16px;padding:36px 32px">
+            <div style="font-family:Rubik;font-weight:500;font-size:88px;color:#E96A73;line-height:1">QS</div>
+            <div style="font-size:22px;color:#666;margin-top:8px">Stars Rating</div>
+          </div>
+        </div>
+      </div>
+      <div class="bottom-grad"></div>
+    </section>
+
+    <!-- 05 IMAGE-LED — parallelogram crops -->
+    <section class="slide" data-screen-label="05 Image grid">
+      <div class="corner-logo"><img src="../assets/logo-horizontal.svg" alt=""></div>
+      <div class="slide-pad" style="display:grid;grid-template-columns:0.9fr 1.1fr;gap:80px;align-items:center;padding:120px 120px 160px">
+        <div>
+          <div class="eyebrow">Inteligencia artificial</div>
+          <h1 class="slide-title">Personalización del aprendizaje sin precedentes.</h1>
+          <hr class="gradient-line" style="margin-top:24px">
+          <p class="slide-body" style="margin-top:32px;color:#444">Nuestros algoritmos analizan el comportamiento del alumnado para identificar áreas de fortaleza y debilidad, y recomendar contenido personalizado.</p>
+        </div>
+        <div style="position:relative;height:640px">
+          <div style="position:absolute;top:0;left:30px;width:380px;height:480px;background:linear-gradient(135deg,#244A80,#60BFB8);transform:skewX(-12deg);border-radius:6px;overflow:hidden">
+            <div style="position:absolute;inset:0;background:radial-gradient(circle at 30% 20%, rgba(255,255,255,0.18), transparent 60%)"></div>
+          </div>
+          <div style="position:absolute;top:160px;right:0;width:380px;height:480px;background:linear-gradient(135deg,#963058,#E96A73);transform:skewX(-12deg);border-radius:6px;overflow:hidden">
+            <div style="position:absolute;inset:0;background:radial-gradient(circle at 70% 80%, rgba(255,255,255,0.22), transparent 60%)"></div>
+          </div>
+        </div>
+      </div>
+      <div class="bottom-grad"></div>
+    </section>
+
+    <!-- 06 QUOTE -->
+    <section class="slide" data-screen-label="06 Quote" style="background:#F4F4F4">
+      <div class="corner-logo"><img src="../assets/logo-horizontal.svg" alt=""></div>
+      <div class="slide-pad" style="justify-content:center;align-items:flex-start;padding:0 200px">
+        <hr class="gradient-line" style="margin-bottom:48px">
+        <div style="font-family:Rubik;font-weight:500;font-size:84px;line-height:1.15;letter-spacing:-0.01em;max-width:1500px">Creemos que todos merecen tener acceso a una educación de calidad, sin importar su ubicación o situación.</div>
+        <div style="margin-top:56px;font-size:24px;color:#666;letter-spacing:0.1em;text-transform:uppercase">— Filosofía de marca</div>
+      </div>
+      <div class="bottom-grad"></div>
+    </section>
+
+    <!-- 07 INSTITUTIONS — comparison columns -->
+    <section class="slide" data-screen-label="07 Institutions">
+      <div class="corner-logo"><img src="../assets/logo-horizontal.svg" alt=""></div>
+      <div class="slide-pad">
+        <div class="eyebrow">Instituciones</div>
+        <h1 class="slide-title">20 años creando experiencias formativas.</h1>
+        <hr class="gradient-line" style="margin:8px 0 64px">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:32px;flex-grow:1">
+          <div style="background:#fff;border-radius:14px;padding:36px;box-shadow:0 2px 8px rgba(32,32,32,0.06);display:flex;flex-direction:column;gap:16px">
+            <div style="width:56px;height:56px;background:#F4F4F4;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#60BFB8"><i data-lucide="graduation-cap" style="width:32px;height:32px;stroke-width:1.75"></i></div>
+            <div style="font-family:Rubik;font-weight:500;font-size:30px">Educación superior</div>
+            <div style="font-size:20px;color:#666;line-height:1.5">Universidades online y business schools con programas máster.</div>
+          </div>
+          <div style="background:#fff;border-radius:14px;padding:36px;box-shadow:0 2px 8px rgba(32,32,32,0.06);display:flex;flex-direction:column;gap:16px">
+            <div style="width:56px;height:56px;background:#F4F4F4;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#60BFB8"><i data-lucide="book-open" style="width:32px;height:32px;stroke-width:1.75"></i></div>
+            <div style="font-family:Rubik;font-weight:500;font-size:30px">Formación continua</div>
+            <div style="font-size:20px;color:#666;line-height:1.5">Cursos y certificados de profesionalidad para el empleo.</div>
+          </div>
+          <div style="background:#fff;border-radius:14px;padding:36px;box-shadow:0 2px 8px rgba(32,32,32,0.06);display:flex;flex-direction:column;gap:16px">
+            <div style="width:56px;height:56px;background:#F4F4F4;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#60BFB8"><i data-lucide="scale" style="width:32px;height:32px;stroke-width:1.75"></i></div>
+            <div style="font-family:Rubik;font-weight:500;font-size:30px">Oposiciones</div>
+            <div style="font-size:20px;color:#666;line-height:1.5">Temarios y preparación al acceso del empleo público.</div>
+          </div>
+          <div style="background:#fff;border-radius:14px;padding:36px;box-shadow:0 2px 8px rgba(32,32,32,0.06);display:flex;flex-direction:column;gap:16px">
+            <div style="width:56px;height:56px;background:#F4F4F4;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#60BFB8"><i data-lucide="cpu" style="width:32px;height:32px;stroke-width:1.75"></i></div>
+            <div style="font-family:Rubik;font-weight:500;font-size:30px">EdTech &amp; IA</div>
+            <div style="font-size:20px;color:#666;line-height:1.5">Plataforma EDUCA LXP y soluciones de Machine Learning propias.</div>
+          </div>
+        </div>
+      </div>
+      <div class="bottom-grad"></div>
+    </section>
+
+    <!-- 08 CLOSING — full gradient + slogan -->
+    <section class="slide" data-screen-label="08 Closing" style="background:linear-gradient(135deg,#60BFB8 0%,#2E7ABE 25%,#244A80 50%,#963058 80%,#E96A73 100%);color:#fff">
+      <div class="slide-pad" style="justify-content:center;align-items:center;text-align:center;padding:120px">
+        <img src="../assets/logo-horizontal-negative.svg" alt="EDUCA EDTECH Group" style="height:96px;margin-bottom:80px">
+        <div style="font-family:Rubik;font-weight:500;font-size:160px;line-height:1.0;letter-spacing:-0.015em">Together<br>our future<br>is bright.</div>
+        <div style="margin-top:80px;font-size:28px;letter-spacing:0.06em;opacity:0.85">educaedtech.com</div>
+      </div>
+    </section>
+
+  </deck-stage>
+  <script>lucide.createIcons();</script>
+</body>
+</html>
