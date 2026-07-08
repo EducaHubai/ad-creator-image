@@ -323,7 +323,7 @@ async function generateImage(prompt, apiSize) {
   const res = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "dall-e-2", prompt, n: 1, size: "1024x1024" }),
+    body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: apiSize }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
