@@ -100,12 +100,16 @@ const globalCSS = `
 `;
 
 // ─── API HELPERS ────────────────────────────────────────────────────
+function getOpenAIKey() {
+  return window.__OPENAI_KEY__ || import.meta.env.OPENAI_KEY_ || "";
+}
+
 async function callClaude(systemPrompt, userMessage, maxTokens = 1000) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": window.__ANTHROPIC_KEY__ || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       max_tokens: maxTokens,
       system: systemPrompt,
       messages: [{ role: "user", content: userMessage }],
@@ -116,8 +120,8 @@ async function callClaude(systemPrompt, userMessage, maxTokens = 1000) {
 }
 
 async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "gpt-4o") {
-  const key = window.__OPENAI_KEY__;
-  if (!key) throw new Error("Sin OpenAI key. Ejecuta: window.__OPENAI_KEY__ = 'sk-...' en consola.");
+  const key = getOpenAIKey();
+  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_KEY_ en Coolify o ejecuta window.__OPENAI_KEY__ = 'sk-...' en consola.");
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -139,8 +143,8 @@ async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "
 }
 
 async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000) {
-  const key = window.__OPENAI_KEY__;
-  if (!key) throw new Error("Sin OpenAI key. Ejecuta: window.__OPENAI_KEY__ = 'sk-...' en consola.");
+  const key = getOpenAIKey();
+  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_KEY_ en Coolify o ejecuta window.__OPENAI_KEY__ = 'sk-...' en consola.");
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -314,8 +318,8 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
 }
 
 async function generateImage(prompt, apiSize) {
-  const key = window.__OPENAI_KEY__;
-  if (!key) throw new Error("Sin OpenAI key. Ejecuta: window.__OPENAI_KEY__ = 'sk-...' en consola.");
+  const key = getOpenAIKey();
+  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_KEY_ en Coolify o ejecuta window.__OPENAI_KEY__ = 'sk-...' en consola.");
   const res = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -1128,8 +1132,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     await waitIfPaused();
     if (isCancelledRef.current) return;
 
-    // Image generation (requires window.__OPENAI_KEY__)
-    if (window.__OPENAI_KEY__) {
+    // Image generation (requires OPENAI_KEY_ env or window.__OPENAI_KEY__)
+    if (getOpenAIKey()) {
       setPhase("imaging");
       const selectedFormats = batch.config.formats || [];
       const customDim = batch.config.customDim;
