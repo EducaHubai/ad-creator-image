@@ -1,5 +1,7 @@
 FROM node:22-alpine AS build
 WORKDIR /app
+ARG OPENAI_KEY_
+ENV OPENAI_KEY_=$OPENAI_KEY_
 COPY package*.json ./
 RUN npm ci
 COPY . .
