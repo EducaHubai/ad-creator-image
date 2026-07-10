@@ -247,6 +247,32 @@ Return ONLY valid JSON: {"headline":"...","body":"...","benefit1":"...","benefit
   catch { return { headline: `Master ${courseData.name}`, body: `Transform your career.`, benefit1: "Flexible schedule", benefit2: "Industry certificate", cta: campaignConfig.ctas[0] || "Learn more", painPoint: campaignConfig.painPoints[0] || "Level up" }; }
 }
 
+function resizeImageFile(file, maxDim = 768, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = ev.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 // ─── BRAND VISUAL ANALYSIS ───────────────────────────────────────────
 async function analyzeRefImages(refImages) {
   if (!refImages?.length) return "";
@@ -1583,11 +1609,8 @@ function BrandsScreen({ brands, onSave }) {
 
       const addRefImages = e => {
         const files = Array.from(e.target.files);
-        Promise.all(files.map(file => new Promise(resolve => {
-          const reader = new FileReader();
-          reader.onload = ev => resolve({ name: file.name, data: ev.target.result });
-          reader.readAsDataURL(file);
-        }))).then(loaded => f("refImages", [...refImgs, ...loaded].slice(0, 8)));
+        Promise.all(files.map(file => resizeImageFile(file).then(data => ({ name: file.name, data }))))
+          .then(loaded => f("refImages", [...refImgs, ...loaded].slice(0, 8)));
       };
 
       const runRefAnalysis = async () => {
