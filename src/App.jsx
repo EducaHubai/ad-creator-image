@@ -100,29 +100,17 @@ const globalCSS = `
 `;
 
 // ─── API HELPERS ────────────────────────────────────────────────────
-function getOpenAIKey() {
-  return window.__OPENAI_KEY__ || import.meta.env.OPENAI_KEY_ || "";
+function getLiteLLMKey() {
+  return window.__LITELLM_KEY__ || import.meta.env.VITE_LITELLM_API_KEY || "";
+}
+function getLiteLLMBase() {
+  return (window.__LITELLM_BASE__ || import.meta.env.VITE_LITELLM_BASE_URL || "https://litellm-hel.hawkings.educaedtech.tools").replace(/\/$/, "");
 }
 
-async function callClaude(systemPrompt, userMessage, maxTokens = 1000) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": window.__ANTHROPIC_KEY__ || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-    body: JSON.stringify({
-      model: "claude-sonnet-5",
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
-  const data = await res.json();
-  return data.content?.[0]?.text || "";
-}
-
-async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "gpt-4o") {
-  const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_KEY_ en Coolify o ejecuta window.__OPENAI_KEY__ = 'sk-...' en consola.");
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function callLiteLLM(systemPrompt, userMessage, maxTokens = 1000, model = "gemini-2.5-flash") {
+  const key = getLiteLLMKey();
+  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
+  const res = await fetch(`${getLiteLLMBase()}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -136,20 +124,20 @@ async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
+    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
 }
 
-async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000) {
-  const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_KEY_ en Coolify o ejecuta window.__OPENAI_KEY__ = 'sk-...' en consola.");
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function callLiteLLMVision(systemPrompt, contentBlocks, maxTokens = 1000, model = "gemini-2.5-flash") {
+  const key = getLiteLLMKey();
+  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
+  const res = await fetch(`${getLiteLLMBase()}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "gpt-4o",
+      model,
       max_tokens: maxTokens,
       messages: [
         { role: "system", content: systemPrompt },
@@ -159,7 +147,7 @@ async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
+    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
@@ -184,12 +172,12 @@ async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
   "extracted_notes": "important nuances"
 }`;
 
-  const fileBlocks = pdfBase64Array.map((b64, i) => ({
-    type: "file",
-    file: { filename: `brand_doc_${i + 1}.pdf`, file_data: `data:application/pdf;base64,${b64}` },
+  const fileBlocks = pdfBase64Array.map((b64) => ({
+    type: "image_url",
+    image_url: { url: `data:application/pdf;base64,${b64}` },
   }));
 
-  const raw = await callOpenAIVision(
+  const raw = await callLiteLLMVision(
     system,
     [...fileBlocks, { type: "text", text: `Extract brand config.${existingBrandName ? ` Brand: "${existingBrandName}".` : ""} Return only JSON.` }],
     2000
@@ -205,7 +193,7 @@ async function researchCourse(courseData, url) {
     courseData.nivel  ? `Level: ${courseData.nivel}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: "${courseData.name}"\n${meta}\nURL: ${url}\n\nReturn JSON: {"category":"string","instructor":"string","duration":"string","outcome":"string","differentiators":"string","accreditation":"string","level":"string"}`;
-  const raw = await callOpenAI(system, user, 600);
+  const raw = await callLiteLLM(system, user, 600);
   try { return JSON.parse(raw.replace(/```json|```/g, "")); }
   catch { return { category: "Education", instructor: "Expert Faculty", duration: "Online", outcome: `Master ${courseData.name}`, differentiators: "Flexible online learning", accreditation: "Certified", level: courseData.nivel || "Professional" }; }
 }
@@ -242,7 +230,7 @@ Return ONLY valid JSON: {"headline":"...","body":"...","benefit1":"...","benefit
     courseData.nivel  ? `Level: ${courseData.nivel}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: ${courseData.name}\n${courseMeta}\nOutcome: ${research.outcome}\nDifferentiators: ${research.differentiators}`;
-  const raw = await callOpenAI(system, user, 800);
+  const raw = await callLiteLLM(system, user, 800);
   try { return JSON.parse(raw.replace(/```json|```/g, "")); }
   catch { return { headline: `Master ${courseData.name}`, body: `Transform your career.`, benefit1: "Flexible schedule", benefit2: "Industry certificate", cta: campaignConfig.ctas[0] || "Learn more", painPoint: campaignConfig.painPoints[0] || "Level up" }; }
 }
@@ -280,7 +268,7 @@ async function analyzeRefImages(refImages) {
     type: "image_url",
     image_url: { url: img.data || img, detail: "low" },
   }));
-  const result = await callOpenAIVision(
+  const result = await callLiteLLMVision(
     "You are a visual brand analyst. Analyze the reference images and return a concise 2-3 sentence visual aesthetic descriptor: color mood, lighting style, composition, photographic feel. Use concrete visual language suitable for image generation prompts. Return only the descriptor text.",
     [...imageBlocks, { type: "text", text: "Describe the visual aesthetic for ad image generation prompts." }],
     250
@@ -340,33 +328,23 @@ HARD RULES: NO text, NO logos, NO typography, NO people holding phones or signs,
 Color grading should harmonize with the brand palette above.
 Specify: mood, lighting quality, composition, depth of field, photographic style.`;
 
-  return (await callOpenAI(system, user, 280)).trim();
+  return (await callLiteLLM(system, user, 280)).trim();
 }
 
 async function generateImage(prompt, apiSize) {
-  const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_KEY_ en Coolify o ejecuta window.__OPENAI_KEY__ = 'sk-...' en consola.");
-  const res = await fetch("https://api.openai.com/v1/images/generations", {
+  const key = getLiteLLMKey();
+  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
+  const res = await fetch(`${getLiteLLMBase()}/v1/images/generations`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: apiSize }),
+    body: JSON.stringify({ model: "gemini-3.1-flash-image-preview", prompt, n: 1, size: apiSize, response_format: "b64_json" }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "image generation failed"}`);
+    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "image generation failed"}`);
   }
   const data = await res.json();
-  // API returns URL by default — fetch it and convert to base64 for Canvas use
-  const imageUrl = data.data?.[0]?.url || data.data?.[0]?.b64_json || null;
-  if (!imageUrl) return null;
-  if (!imageUrl.startsWith("http")) return imageUrl; // already b64
-  const imgRes = await fetch(imageUrl);
-  const blob = await imgRes.blob();
-  return new Promise(resolve => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result.replace(/^data:image\/\w+;base64,/, ""));
-    reader.readAsDataURL(blob);
-  });
+  return data.data?.[0]?.b64_json || null;
 }
 
 async function loadFontFace(name, src) {
@@ -1158,8 +1136,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     await waitIfPaused();
     if (isCancelledRef.current) return;
 
-    // Image generation (requires OPENAI_KEY_ env or window.__OPENAI_KEY__)
-    if (getOpenAIKey()) {
+    // Image generation (requires VITE_LITELLM_API_KEY env or window.__LITELLM_KEY__)
+    if (getLiteLLMKey()) {
       setPhase("imaging");
       const selectedFormats = batch.config.formats || [];
       const customDim = batch.config.customDim;
@@ -1626,7 +1604,7 @@ function BrandsScreen({ brands, onSave }) {
       return (
         <div>
           <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
-            Claude analiza tus imágenes de referencia y extrae un descriptor visual de marca. Ese descriptor se inyecta en cada prompt de generación de imagen.
+            Gemini analiza tus imágenes de referencia y extrae un descriptor visual de marca. Ese descriptor se inyecta en cada prompt de generación de imagen.
           </div>
 
           {/* Upload */}
@@ -1649,7 +1627,7 @@ function BrandsScreen({ brands, onSave }) {
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
             <button onClick={runRefAnalysis} disabled={analyzing || !refImgs.length}
               style={{ background: refImgs.length ? T.text : T.cardBorder, color: T.cream, fontSize: 12, fontWeight: 600, padding: "8px 18px", borderRadius: 999, opacity: analyzing ? 0.7 : 1 }}>
-              {analyzing ? "Analizando…" : "✦ Analizar referencias con Claude"}
+              {analyzing ? "Analizando…" : "✦ Analizar referencias con Gemini"}
             </button>
             {analyzeErr && <span style={{ fontSize: 11, color: T.statusFail.text }}>{analyzeErr}</span>}
           </div>
