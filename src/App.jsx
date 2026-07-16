@@ -91,7 +91,7 @@ const globalCSS = `
   @font-face { font-family:"Lato";  src:url("/fonts/Lato-Bold.ttf")     format("truetype"); font-weight:700; font-display:swap; }
   @font-face { font-family:"Lato";  src:url("/fonts/Lato-BoldItalic.ttf") format("truetype"); font-weight:700; font-style:italic; font-display:swap; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
+  html, body, #root { width: 100%; height: 100%; }
   body { font-family: "Lato", "Calibri", system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
