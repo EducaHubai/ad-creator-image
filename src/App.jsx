@@ -104,7 +104,9 @@ function getLiteLLMKey() {
   return window.__LITELLM_KEY__ || import.meta.env.VITE_LITELLM_API_KEY || "";
 }
 function getLiteLLMBase() {
-  return (window.__LITELLM_BASE__ || import.meta.env.VITE_LITELLM_BASE_URL || "https://litellm-hel.hawkings.educaedtech.tools").replace(/\/$/, "");
+  const base = window.__LITELLM_BASE__ || import.meta.env.VITE_LITELLM_BASE_URL || "";
+  if (!base) throw new Error("Sin LiteLLM base URL. Configura VITE_LITELLM_BASE_URL en Coolify.");
+  return base.replace(/\/$/, "");
 }
 
 async function callLiteLLM(systemPrompt, userMessage, maxTokens = 1000, model = "gemini-2.5-flash") {
