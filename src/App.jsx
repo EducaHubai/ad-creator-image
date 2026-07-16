@@ -1,25 +1,26 @@
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, createContext, useContext } from "react";
 
 // ─── DESIGN TOKENS — EDUCA EDTECH Group ───────────────────────────────
-const T = {
-  sidebar:    "#202020",
-  sidebarText:"#BABABA",
-  sidebarAct: "#FFFFFF",
-  cream:      "#F4F4F4",       // app background (gray-soft)
+const LIGHT = {
+  sidebar:    "#FFFFFF",
+  sidebarText:"#666666",
+  sidebarAct: "#202020",
+  sidebarBorder: "1px solid #E0E0E0",
+  cream:      "#F4F4F4",
   card:       "#FFFFFF",
   cardBorder: "#E0E0E0",
-  text:       "#202020",       // ee-black
-  textMuted:  "#666666",       // ee-gray-text
-  textLight:  "#BABABA",       // ee-gray-icon
-  accent:     "#963058",       // burdeos — primary CTA / highlight
-  accentDark: "#FFFFFF",       // text on burdeos
-  teal:       "#60BFB8",       // secondary accent / success
-  tealText:   "#2A7A73",       // dark teal for text on teal-tinted bg
-  coral:      "#E96A73",       // warm secondary
+  text:       "#202020",
+  textMuted:  "#666666",
+  textLight:  "#BABABA",
+  accent:     "#963058",
+  accentDark: "#FFFFFF",
+  teal:       "#60BFB8",
+  tealText:   "#2A7A73",
+  coral:      "#E96A73",
   blueDark:   "#244A80",
-  blueMid:    "#2E7ABE",       // links, interactive
-  ctaDark:    "#202020",       // dark banner bg sections
+  blueMid:    "#2E7ABE",
+  ctaDark:    "#202020",
   white:      "#FFFFFF",
   gradient:   "linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%)",
   statusDone: { bg: "#EAF7F6", text: "#2A7A73" },
@@ -27,6 +28,57 @@ const T = {
   statusFail: { bg: "#FFE6E8", text: "#963058" },
   statusPend: { bg: "#F4F4F4", text: "#666666" },
 };
+
+const DARK = {
+  sidebar:    "#1A1A1A",
+  sidebarText:"#BABABA",
+  sidebarAct: "#FFFFFF",
+  sidebarBorder: "none",
+  cream:      "#202020",
+  card:       "#2A2A2A",
+  cardBorder: "#3A3A3A",
+  text:       "#FFFFFF",
+  textMuted:  "#BABABA",
+  textLight:  "#5A5A5A",
+  accent:     "#963058",
+  accentDark: "#FFFFFF",
+  teal:       "#60BFB8",
+  tealText:   "#60BFB8",
+  coral:      "#E96A73",
+  blueDark:   "#244A80",
+  blueMid:    "#60BFB8",
+  ctaDark:    "#F4F4F4",
+  white:      "#202020",
+  gradient:   "linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%)",
+  statusDone: { bg: "#1A3330", text: "#60BFB8" },
+  statusRun:  { bg: "#1A2A3A", text: "#60BFB8" },
+  statusFail: { bg: "#3A1A1E", text: "#E96A73" },
+  statusPend: { bg: "#2A2A2A", text: "#BABABA" },
+};
+
+// ─── THEME CONTEXT ────────────────────────────────────────────────────
+const ThemeContext = createContext({ tokens: LIGHT, themeName: "light", toggle: () => {} });
+function useTheme() { return useContext(ThemeContext).tokens; }
+function useThemeName() { return useContext(ThemeContext).themeName; }
+function useThemeToggle() { return useContext(ThemeContext).toggle; }
+
+function IcoSun({ s = 14 }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+      <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+    </svg>
+  );
+}
+function IcoMoon({ s = 14 }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+  );
+}
 
 const globalCSS = `
   @font-face { font-family:"Rubik"; src:url("/fonts/Rubik-Light.ttf")   format("truetype"); font-weight:300; font-display:swap; }
@@ -40,22 +92,23 @@ const globalCSS = `
   @font-face { font-family:"Lato";  src:url("/fonts/Lato-BoldItalic.ttf") format("truetype"); font-weight:700; font-style:italic; font-display:swap; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
-  body { font-family: "Lato", "Calibri", system-ui, -apple-system, sans-serif; background: ${T.cream}; color: ${T.text}; -webkit-font-smoothing: antialiased; }
+  body { font-family: "Lato", "Calibri", system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: ${T.cardBorder}; border-radius: 2px; }
+  ::-webkit-scrollbar-thumb { background: rgba(150,150,150,0.3); border-radius: 2px; }
   button { cursor: pointer; border: none; outline: none; font-family: inherit; }
   input, textarea, select { font-family: inherit; outline: none; }
   .fade-in { animation: fadeIn 0.25s cubic-bezier(0.22,1,0.36,1) forwards; }
   @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .gradient-line { height: 3px; width: 100%; background: ${T.gradient}; display: block; border: 0; }
+  .gradient-line { height: 3px; width: 100%; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); display: block; border: 0; }
 
-  /* ── Dashboard body ── */
-  .dash-body { padding: 36px 40px; max-width: 860px; flex: 1; }
-  @media (max-width: 767px) { .dash-body { padding: 24px 20px; } }
-  @media (max-width: 479px) { .dash-body { padding: 20px 16px; } }
+  /* ── Main content area ── */
+  .dash-body { padding: 36px 40px; flex: 1; }
+  .content-area { padding: 40px 40px; flex: 1; }
+  @media (max-width: 767px) { .dash-body { padding: 24px 20px; } .content-area { padding: 24px 20px; } }
+  @media (max-width: 479px) { .dash-body { padding: 20px 16px; } .content-area { padding: 20px 16px; } }
 
   /* ── Responsive layout ── */
   .app-shell   { display: flex; min-height: 100vh; }
@@ -523,6 +576,7 @@ async function parseFile(file) {
 
 // ─── STATUS CHIP ────────────────────────────────────────────────────
 function Chip({ status }) {
+  const T = useTheme();
   const map = { done: T.statusDone, running: T.statusRun, failed: T.statusFail, pending: T.statusPend, generating: T.statusRun, review: { bg: "#F8E8EE", text: "#963058" }, exported: T.statusDone };
   const labels = { done:"Listo", running:"Ejecutando", failed:"Fallido", pending:"Pendiente", generating:"Generando", review:"Revisión", exported:"Exportado" };
   const c = map[status?.toLowerCase()] || T.statusPend;
@@ -535,6 +589,9 @@ function Chip({ status }) {
 
 // ─── SIDEBAR ────────────────────────────────────────────────────────
 function Sidebar({ active, onNav, batches, isOpen, onClose }) {
+  const T = useTheme();
+  const themeName = useThemeName();
+  const toggle = useThemeToggle();
   const pendingCount = batches.filter(b => b.status === "review").length;
   const navItems = [
     { id: "dashboard", label: "Tablero" },
@@ -542,13 +599,23 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
     { id: "batches",   label: "Lotes",    badge: pendingCount > 0 ? pendingCount : null },
     { id: "brands",    label: "Marcas" },
   ];
+  const isLight = themeName === "light";
+  const sidebarBg = isLight ? "#FFFFFF" : "#1A1A1A";
+  const divider = isLight ? `1px solid #E0E0E0` : `1px solid rgba(255,255,255,0.08)`;
+  const activeItemBg = isLight ? "rgba(32,32,32,0.06)" : "rgba(255,255,255,0.07)";
+  const footerTextColor = isLight ? "rgba(32,32,32,0.25)" : "rgba(255,255,255,0.25)";
   return (
-    <aside className={`app-sidebar${isOpen ? " sidebar-open" : ""}`} style={{ background: T.sidebar, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+    <aside className={`app-sidebar${isOpen ? " sidebar-open" : ""}`} style={{ background: sidebarBg, display: "flex", flexDirection: "column", minHeight: "100vh", borderRight: divider }}>
       <div className="gradient-line" />
       <div style={{ padding: "18px 20px 20px" }}>
-        <img src="/logo-negative.svg" alt="EDUCA EDTECH Group" style={{ width: "100%", maxWidth: 148, display: "block" }} />
+        <img
+          src={isLight ? "/logo-primary.svg" : "/logo-negative.svg"}
+          alt="EDUCA EDTECH Group"
+          style={{ width: "100%", maxWidth: 148, display: "block" }}
+          onError={e => { e.target.src = "/logo-negative.svg"; }}
+        />
       </div>
-      <div style={{ padding: "0 20px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ padding: "0 20px 16px", borderBottom: divider }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: T.teal, letterSpacing: "0.12em", textTransform: "uppercase" }}>AdBatch</div>
         <div style={{ fontSize: 10, color: T.sidebarText, marginTop: 2 }}>Generador de creatividades</div>
       </div>
@@ -556,7 +623,8 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
         {navItems.map(item => {
           const isActive = active === item.id;
           return (
-            <button key={item.id} onClick={() => { onNav(item.id); onClose?.(); }} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", background: isActive ? "rgba(255,255,255,0.07)" : "transparent", color: isActive ? T.sidebarAct : T.sidebarText, fontSize: 13, fontWeight: isActive ? 600 : 400, letterSpacing: "0.01em", transition: "all 0.15s", borderLeft: isActive ? `2px solid ${T.teal}` : "2px solid transparent" }}>
+            <button key={item.id} onClick={() => { onNav(item.id); onClose?.(); }}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", background: isActive ? activeItemBg : "transparent", color: isActive ? T.sidebarAct : T.sidebarText, fontSize: 13, fontWeight: isActive ? 600 : 400, letterSpacing: "0.01em", transition: "all 0.15s", borderLeft: isActive ? `2px solid ${T.teal}` : "2px solid transparent" }}>
               <span>{item.label}</span>
               {item.badge && (
                 <span style={{ background: T.accent, color: T.accentDark, fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 999 }}>
@@ -567,8 +635,13 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
           );
         })}
       </nav>
-      <div style={{ padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.25)", letterSpacing: "0.1em", textTransform: "uppercase", lineHeight: 1.5, marginBottom: 10 }}>
+      <div style={{ padding: "12px 20px 16px", borderTop: divider }}>
+        <button onClick={toggle}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, color: T.sidebarText, marginBottom: 12 }}>
+          {isLight ? <IcoMoon s={13} /> : <IcoSun s={13} />}
+          {isLight ? "Tema oscuro" : "Tema claro"}
+        </button>
+        <div style={{ fontSize: 9, fontWeight: 700, color: footerTextColor, letterSpacing: "0.1em", textTransform: "uppercase", lineHeight: 1.5, marginBottom: 10 }}>
           Together our future is bright.
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -585,6 +658,7 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
 
 // ─── TOP BAR ────────────────────────────────────────────────────────
 function TopBar({ title, creditsLeft, onNewBatch, onMenuToggle }) {
+  const T = useTheme();
   return (
     <div style={{ background: T.card, borderBottom: `1px solid ${T.cardBorder}`, flexShrink: 0, boxShadow: "0 1px 4px rgba(32,32,32,0.06)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 20px 12px 24px", gap: 12 }}>
@@ -607,6 +681,7 @@ function TopBar({ title, creditsLeft, onNewBatch, onMenuToggle }) {
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────
 function Dashboard({ batches, onNewBatch, onNav }) {
+  const T = useTheme();
   const stats = [
     { v: batches.length || 142,                                         l: "Lotes creados" },
     { v: batches.reduce((a, b) => a + (b.adsCount || 0), 0) || 3847,   l: "Creatividades generadas" },
@@ -705,6 +780,7 @@ const DEFAULT_BRANDS = [
 ];
 
 function StepIndicator({ step, total }) {
+  const T = useTheme();
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32 }}>
       {Array.from({ length: total }, (_, i) => (
@@ -719,6 +795,7 @@ function StepIndicator({ step, total }) {
 }
 
 function SelectPill({ label, selected, onClick, accent }) {
+  const T = useTheme();
   return (
     <button onClick={onClick} style={{ padding: "7px 14px", borderRadius: 999, border: `1.5px solid ${selected ? (accent ? T.accent : T.text) : T.cardBorder}`, background: selected ? (accent ? T.accent : T.text) : T.card, color: selected ? (accent ? T.accentDark : T.cream) : T.textMuted, fontSize: 12, fontWeight: selected ? 600 : 400, transition: "all 0.15s", cursor: "pointer" }}>
       {label}
@@ -727,6 +804,7 @@ function SelectPill({ label, selected, onClick, accent }) {
 }
 
 function Generate({ brands, onBatchCreated }) {
+  const T = useTheme();
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({
     brandId: brands[0]?.id || "",
@@ -1050,7 +1128,7 @@ function Generate({ brands, onBatchCreated }) {
   ];
 
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", maxWidth: 780, flex: 1 }}>
+    <div className="fade-in content-area" style={{ flex: 1 }}>
       <StepIndicator step={step} total={5} />
       {steps[step]}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36 }}>
@@ -1063,6 +1141,7 @@ function Generate({ brands, onBatchCreated }) {
 
 // ─── BATCH PROCESSOR ────────────────────────────────────────────────
 function BatchProcessor({ batch, brands, onUpdate }) {
+  const T = useTheme();
   const [items, setItems] = useState([]);
   const [phase, setPhase] = useState("researching");
   const [progress, setProgress] = useState(0);
@@ -1187,7 +1266,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const phaseLabel = ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
 
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", maxWidth: 780, flex: 1 }}>
+    <div className="fade-in content-area" style={{ flex: 1 }}>
       <div style={{ marginBottom: 8 }}>
         <span style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Procesando</span>
       </div>
@@ -1271,8 +1350,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
 
 // ─── BATCHES LIST ────────────────────────────────────────────────────
 function Batches({ batches, onOpen, onNav }) {
+  const T = useTheme();
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", maxWidth: 860, flex: 1 }}>
+    <div className="fade-in" style={{ padding: "40px 40px", flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Lotes</h1>
         <button onClick={() => onNav("generate")} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 18px", borderRadius: 999, display: "flex", alignItems: "center", gap: 6 }}>+ Nuevo lote</button>
@@ -1306,6 +1386,7 @@ function Batches({ batches, onOpen, onNav }) {
 const BRAND_TABS = ["Identidad", "Tokens", "Activos", "Tipografía", "Voz y reglas", "Config. anuncios", "Refs. visuales"];
 
 function BrandField({ label, value, onChange, type = "text", hint }) {
+  const T = useTheme();
   return (
     <div style={{ marginBottom: 18 }}>
       <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 5 }}>{label}</label>
@@ -1322,6 +1403,7 @@ function BrandField({ label, value, onChange, type = "text", hint }) {
 }
 
 function TagList({ items, onRemove, onAdd, placeholder, color }) {
+  const T = useTheme();
   const [val, setVal] = useState("");
   const bg   = color === "red" ? "#fde8e8" : color === "green" ? T.statusDone.bg : T.card;
   const text = color === "red" ? T.statusFail.text : color === "green" ? T.statusDone.text : T.text;
@@ -1347,6 +1429,7 @@ function TagList({ items, onRemove, onAdd, placeholder, color }) {
 }
 
 function SwatchRow({ colors, onChange }) {
+  const T = useTheme();
   const keys = ["primary", "secondary", "accent", "background", "text_on_overlay", "cta_text"];
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
@@ -1365,6 +1448,7 @@ function SwatchRow({ colors, onChange }) {
 }
 
 function BrandsScreen({ brands, onSave }) {
+  const T = useTheme();
   const [selectedBrand, setSelectedBrand] = useState(brands[0]?.id || "");
   const [activeTab, setActiveTab] = useState("Identidad");
   const brand = brands.find(b => b.id === selectedBrand) || brands[0];
@@ -1651,7 +1735,7 @@ function BrandsScreen({ brands, onSave }) {
   };
 
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", flex: 1, maxWidth: 960 }}>
+    <div className="fade-in content-area" style={{ flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Estudio de marca</h1>
         <button onClick={save} style={{ background: T.accent, color: T.accentDark, fontSize: 12, fontWeight: 700, padding: "8px 20px", borderRadius: 999 }}>✦ Publicar cambios</button>
@@ -1806,6 +1890,7 @@ async function exportBatchZip(batch, approvedKeys = null) {
 // ─── AD PREVIEW GRID ─────────────────────────────────────────────────
 // ─── IMAGE APPROVAL GRID ─────────────────────────────────────────────
 function ImageApprovalGrid({ items, approved, onToggle }) {
+  const T = useTheme();
   // Flatten: one card per (item × format)
   const cards = [];
   (items || []).forEach((item, itemIdx) => {
@@ -1873,6 +1958,7 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
 
 // ─── BATCH DETAIL ────────────────────────────────────────────────────
 function BatchDetail({ batch, onBack }) {
+  const T = useTheme();
   // Build all card keys from composited images
   const allKeys = [];
   (batch.items || []).forEach((item, idx) => {
@@ -1991,6 +2077,17 @@ export default function App() {
   const [activeBatch, setActiveBatch] = useState(null);
   const [processingBatch, setProcessingBatch] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [themeName, setThemeName] = useState(() => {
+    try { return localStorage.getItem("adbatch-theme") || "light"; } catch { return "light"; }
+  });
+  function toggleTheme() {
+    setThemeName(prev => {
+      const next = prev === "light" ? "dark" : "light";
+      try { localStorage.setItem("adbatch-theme", next); } catch {}
+      return next;
+    });
+  }
+  const tokens = themeName === "dark" ? DARK : LIGHT;
 
   function onBatchCreated(batch) {
     setBatches(prev => [batch, ...prev]);
@@ -2013,9 +2110,9 @@ export default function App() {
   const titleMap = { dashboard: "resumen", generate: "nuevo lote", batches: "todos los lotes", brands: "estudio de marca", processing: "procesando", "batch-detail": "detalle del lote" };
 
   return (
-    <>
+    <ThemeContext.Provider value={{ tokens, themeName, toggle: toggleTheme }}>
       <style>{globalCSS}</style>
-      <div className="app-shell">
+      <div className="app-shell" style={{ background: tokens.cream, color: tokens.text }}>
         <div className={`app-overlay${sidebarOpen ? " sidebar-open" : ""}`} onClick={() => setSidebarOpen(false)} />
         <Sidebar active={screen} onNav={setScreen} batches={batches} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <div className="app-content">
@@ -2030,6 +2127,6 @@ export default function App() {
           </main>
         </div>
       </div>
-    </>
+    </ThemeContext.Provider>
   );
 }
