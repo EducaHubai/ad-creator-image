@@ -1,5 +1,6 @@
 
 import { useState, useEffect, useRef, createContext, useContext } from "react";
+import { supabase, VIEWS } from "./lib/supabase";
 
 // ─── DESIGN TOKENS — EDUCA EDTECH Group ───────────────────────────────
 const LIGHT = {
@@ -680,13 +681,43 @@ function TopBar({ title, creditsLeft, onNewBatch, onMenuToggle }) {
 }
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────
+const TIME_SAVED_TOOLTIP =
+  "Cada formato tiene una linea base de tiempo estimado que llevaria producir la creatividad manualmente. " +
+  "Ese tiempo se multiplica por el numero de creatividades generadas.\n\n" +
+  "Baselines actuales (editables): IG Feed 1:1 = 4 min, IG Story 9:16 = 5 min, Banner 16:9 = 6 min, Cover LinkedIn 4:1 = 5 min.";
+
 function Dashboard({ batches, onNewBatch, onNav }) {
   const T = useTheme();
+  const [totals, setTotals] = useState({
+    batches_total: 0,
+    creatives_total: 0,
+    formats_total: 0,
+    brands_total: 0,
+    time_saved_hours: 0,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from(VIEWS.totals)
+        .select("*")
+        .single();
+      if (cancelled) return;
+      if (error) {
+        console.warn("[dashboard] Error leyendo totales de Supabase:", error.message);
+        return;
+      }
+      if (data) setTotals(data);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const stats = [
-    { v: batches.length || 142,                                         l: "Lotes creados" },
-    { v: batches.reduce((a, b) => a + (b.adsCount || 0), 0) || 3847,   l: "Creatividades generadas" },
-    { v: 12,                                                             l: "Formatos disponibles" },
-    { v: "4.2h",                                                         l: "Tiempo ahorrado (prom.)" },
+    { v: totals.batches_total,                                         l: "Lotes creados" },
+    { v: totals.creatives_total,                                       l: "Creatividades generadas" },
+    { v: totals.formats_total,                                         l: "Formatos disponibles" },
+    { v: `${totals.time_saved_hours}h`,                                l: "Tiempo ahorrado",           tip: TIME_SAVED_TOOLTIP },
   ];
   const recent = [...batches].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
   return (
@@ -696,10 +727,10 @@ function Dashboard({ batches, onNewBatch, onNav }) {
         <div style={{ maxWidth: 820 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.6)", letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10 }}>AdBatch · Generador de creatividades</div>
           <h1 style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.1, color: T.white, marginBottom: 10, fontFamily: '"Rubik","Calibri",sans-serif' }}>
-            Buenos días, Alex.
+            Buenos días.
           </h1>
           <p style={{ fontSize: 14, color: "rgba(255,255,255,0.78)" }}>
-            {batches.filter(b => b.status === "generating").length || 0} lotes procesando · 847 creatividades restantes este mes.
+            {batches.filter(b => b.status === "generating").length || 0} lotes procesando.
           </p>
         </div>
       </div>
@@ -710,7 +741,22 @@ function Dashboard({ batches, onNewBatch, onNav }) {
         {stats.map((s, i) => (
           <div key={i} style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(32,32,32,0.06)" }}>
             <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 4 }}>{s.v.toLocaleString?.() ?? s.v}</div>
-            <div style={{ fontSize: 12, color: T.textMuted }}>{s.l}</div>
+            <div style={{ fontSize: 12, color: T.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
+              {s.l}
+              {s.tip && (
+                <span
+                  title={s.tip}
+                  style={{
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    width: 14, height: 14, borderRadius: "50%",
+                    border: `1px solid ${T.cardBorder}`, color: T.textMuted,
+                    fontSize: 9, fontWeight: 700, cursor: "help", lineHeight: 1,
+                  }}
+                >
+                  i
+                </span>
+              )}
+            </div>
           </div>
         ))}
       </div>
