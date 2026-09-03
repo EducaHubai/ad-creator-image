@@ -332,11 +332,12 @@ async function analyzeRefImages(refImages) {
 }
 
 // ─── IMAGE GENERATION ────────────────────────────────────────────────
+// gpt-image-1 only accepts these three sizes (plus "auto") — no arbitrary dims.
 const FORMAT_SIZES = {
-  story:     { w: 1080, h: 1920, api: "1024x1792" },
-  feed_4x5:  { w: 1080, h: 1350, api: "1024x1792" },
+  story:     { w: 1080, h: 1920, api: "1024x1536" },
+  feed_4x5:  { w: 1080, h: 1350, api: "1024x1536" },
   square:    { w: 1080, h: 1080, api: "1024x1024" },
-  landscape: { w: 1200, h: 628,  api: "1792x1024" },
+  landscape: { w: 1200, h: 628,  api: "1536x1024" },
 };
 
 function customDimToSize(dim) {
@@ -344,8 +345,8 @@ function customDimToSize(dim) {
   if (!m) return { w: 1080, h: 1080, api: "1024x1024" };
   const w = parseInt(m[1]), h = parseInt(m[2]);
   const ratio = w / h;
-  if (ratio > 1.3) return { w, h, api: "1792x1024" };
-  if (ratio < 0.8) return { w, h, api: "1024x1792" };
+  if (ratio > 1.3) return { w, h, api: "1536x1024" };
+  if (ratio < 0.8) return { w, h, api: "1024x1536" };
   return { w, h, api: "1024x1024" };
 }
 
@@ -394,7 +395,7 @@ async function generateImage(prompt, apiSize) {
   const res = await fetch(`${OPENAI_BASE}/v1/images/generations`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: apiSize }),
+    body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size: apiSize }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
