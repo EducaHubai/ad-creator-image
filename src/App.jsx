@@ -155,19 +155,16 @@ const globalCSS = `
 `;
 
 // ─── API HELPERS ────────────────────────────────────────────────────
-function getLiteLLMKey() {
-  return window.__LITELLM_KEY__ || import.meta.env.VITE_LITELLM_API_KEY || "";
-}
-function getLiteLLMBase() {
-  const base = window.__LITELLM_BASE__ || import.meta.env.VITE_LITELLM_BASE_URL || "";
-  if (!base) throw new Error("Sin LiteLLM base URL. Configura VITE_LITELLM_BASE_URL en Coolify.");
-  return base.replace(/\/$/, "");
-}
+// Direct OpenAI only — VITE_OPENAI_API_KEY (build var) or window.__OPENAI_KEY__ (console).
+function getOpenAIKey() { return window.__OPENAI_KEY__ || import.meta.env.VITE_OPENAI_API_KEY || ""; }
+function hasApiKey()    { return !!getOpenAIKey(); }
 
-async function callLiteLLM(systemPrompt, userMessage, maxTokens = 1000, model = "gemini-2.5-flash") {
-  const key = getLiteLLMKey();
-  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
-  const res = await fetch(`${getLiteLLMBase()}/v1/chat/completions`, {
+const OPENAI_BASE = "https://api.openai.com";
+
+async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "gpt-4o") {
+  const key = getOpenAIKey();
+  if (!key) throw new Error("Sin OpenAI key. Configura VITE_OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  const res = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -181,16 +178,16 @@ async function callLiteLLM(systemPrompt, userMessage, maxTokens = 1000, model = 
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
+    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
 }
 
-async function callLiteLLMVision(systemPrompt, contentBlocks, maxTokens = 1000, model = "gemini-2.5-flash") {
-  const key = getLiteLLMKey();
-  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
-  const res = await fetch(`${getLiteLLMBase()}/v1/chat/completions`, {
+async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000, model = "gpt-4o") {
+  const key = getOpenAIKey();
+  if (!key) throw new Error("Sin OpenAI key. Configura VITE_OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  const res = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -204,7 +201,7 @@ async function callLiteLLMVision(systemPrompt, contentBlocks, maxTokens = 1000, 
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
+    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
@@ -234,7 +231,7 @@ async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
     image_url: { url: `data:application/pdf;base64,${b64}` },
   }));
 
-  const raw = await callLiteLLMVision(
+  const raw = await callOpenAIVision(
     system,
     [...fileBlocks, { type: "text", text: `Extract brand config.${existingBrandName ? ` Brand: "${existingBrandName}".` : ""} Return only JSON.` }],
     2000
@@ -251,7 +248,7 @@ async function researchCourse(courseData, url) {
     courseData.keywords5?.length ? `Keywords: ${courseData.keywords5.join(", ")}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: "${courseData.name}"\n${meta}\nURL: ${url}\n\nReturn JSON: {"category":"string","instructor":"string","duration":"string","outcome":"string","differentiators":"string","accreditation":"string","level":"string"}`;
-  const raw = await callLiteLLM(system, user, 600);
+  const raw = await callOpenAI(system, user, 600);
   try { return JSON.parse(raw.replace(/```json|```/g, "")); }
   catch { return { category: "Education", instructor: "Expert Faculty", duration: "Online", outcome: `Master ${courseData.name}`, differentiators: "Flexible online learning", accreditation: "Certified", level: courseData.nivel || "Professional" }; }
 }
@@ -289,7 +286,7 @@ Return ONLY valid JSON: {"headline":"...","body":"...","benefit1":"...","benefit
     courseData.keywords5?.length ? `Keywords: ${courseData.keywords5.join(", ")}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: ${courseData.name}\n${courseMeta}\nOutcome: ${research.outcome}\nDifferentiators: ${research.differentiators}`;
-  const raw = await callLiteLLM(system, user, 800);
+  const raw = await callOpenAI(system, user, 800);
   try { return JSON.parse(raw.replace(/```json|```/g, "")); }
   catch { return { headline: `Master ${courseData.name}`, body: `Transform your career.`, benefit1: "Flexible schedule", benefit2: "Industry certificate", cta: campaignConfig.ctas[0] || "Learn more", painPoint: campaignConfig.painPoints[0] || "Level up" }; }
 }
@@ -327,7 +324,7 @@ async function analyzeRefImages(refImages) {
     type: "image_url",
     image_url: { url: img.data || img, detail: "low" },
   }));
-  const result = await callLiteLLMVision(
+  const result = await callOpenAIVision(
     "You are a visual brand analyst. Analyze the reference images and return a concise 2-3 sentence visual aesthetic descriptor: color mood, lighting style, composition, photographic feel. Use concrete visual language suitable for image generation prompts. Return only the descriptor text.",
     [...imageBlocks, { type: "text", text: "Describe the visual aesthetic for ad image generation prompts." }],
     250
@@ -387,20 +384,20 @@ HARD RULES: NO text, NO logos, NO typography, NO people holding phones or signs,
 Color grading should harmonize with the brand palette above.
 Specify: mood, lighting quality, composition, depth of field, photographic style.`;
 
-  return (await callLiteLLM(system, user, 280)).trim();
+  return (await callOpenAI(system, user, 280)).trim();
 }
 
 async function generateImage(prompt, apiSize) {
-  const key = getLiteLLMKey();
-  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
-  const res = await fetch(`${getLiteLLMBase()}/v1/images/generations`, {
+  const key = getOpenAIKey();
+  if (!key) throw new Error("Sin OpenAI key. Configura VITE_OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  const res = await fetch(`${OPENAI_BASE}/v1/images/generations`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "gemini-3.1-flash-image-preview", prompt, n: 1, size: apiSize, response_format: "b64_json" }),
+    body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: apiSize, response_format: "b64_json" }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "image generation failed"}`);
+    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "image generation failed"}`);
   }
   const data = await res.json();
   return data.data?.[0]?.b64_json || null;
@@ -1273,9 +1270,9 @@ function Generate({ brands, onBatchCreated }) {
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Listo para generar</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Revisa la configuración antes de lanzar.</p>
 
-      {!getLiteLLMKey() && (
+      {!hasApiKey() && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin LiteLLM key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY</code> en Coolify (o <code>window.__LITELLM_KEY__</code> en consola) antes de lanzar si quieres imágenes.
+          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_OPENAI_API_KEY</code> en Coolify (o <code>window.__OPENAI_KEY__</code> en consola) antes de lanzar si quieres imágenes.
         </div>
       )}
 
@@ -1419,7 +1416,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     // directions are rendered for it, the user approves one, and that same
     // style (deterministic prompt, only title/keywords swapped) replicates
     // across the rest of the courses.
-    const usePilotFlow = hasKeywordsCSV && !!getLiteLLMKey() && researched.length > 0;
+    const usePilotFlow = hasKeywordsCSV && hasApiKey() && researched.length > 0;
     let winningStyleId = null;
     let winningStyleLabel = null;
     let pilotStartIdx = 0;
@@ -1515,8 +1512,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     await waitIfPaused();
     if (isCancelledRef.current) return;
 
-    // Image generation (requires VITE_LITELLM_API_KEY env or window.__LITELLM_KEY__)
-    if (getLiteLLMKey()) {
+    // Image generation (requires an OpenAI key)
+    if (hasApiKey()) {
       setPhase("imaging");
       for (let i = pilotStartIdx; i < researched.length; i++) {
         await waitIfPaused();
@@ -1562,7 +1559,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   }
 
   const done = items.filter(it => ["generated","imaged","imageFailed","researchFailed","copyFailed"].includes(it.status)).length;
-  const missingLiteLLMKey = !getLiteLLMKey();
+  const missingApiKey = !hasApiKey();
   const total = batch.config.courses?.length || 0;
   const barColor = ctrl === "error" ? T.coral : ctrl === "cancelled" ? T.coral : ctrl === "paused" ? T.textMuted : phase === "done" ? T.teal : T.text;
   const phaseLabel = ctrl === "error" ? "Error" : ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "pilot-copy" ? "Generando copy piloto..." : phase === "pilot-imaging" ? "Generando 5 diseños piloto..." : phase === "pilot-review" ? "Esperando aprobación de diseño" : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
@@ -1610,9 +1607,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           <strong>Error:</strong> {pipelineError || "El lote se detuvo por un error inesperado."}
         </div>
       )}
-      {missingLiteLLMKey && ctrl !== "error" && (
+      {missingApiKey && ctrl !== "error" && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin LiteLLM key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY</code> en Coolify y repite el lote.
+          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_OPENAI_API_KEY</code> en Coolify y repite el lote.
         </div>
       )}
 
