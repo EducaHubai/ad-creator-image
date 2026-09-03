@@ -29,6 +29,7 @@ const T = {
 };
 
 const globalCSS = `
+  @import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@400;700&family=Ubuntu:wght@400;700&display=swap');
   @font-face { font-family:"Rubik"; src:url("/fonts/Rubik-Light.ttf")   format("truetype"); font-weight:300; font-display:swap; }
   @font-face { font-family:"Rubik"; src:url("/fonts/Rubik-Regular.ttf") format("truetype"); font-weight:400; font-display:swap; }
   @font-face { font-family:"Rubik"; src:url("/fonts/Rubik-Medium.ttf")  format("truetype"); font-weight:500; font-display:swap; }
@@ -199,6 +200,7 @@ async function researchCourse(courseData, url) {
   const meta = [
     courseData.siglas ? `Acronym/Code: ${courseData.siglas}` : "",
     courseData.nivel  ? `Level: ${courseData.nivel}` : "",
+    courseData.keywords5?.length ? `Keywords: ${courseData.keywords5.join(", ")}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: "${courseData.name}"\n${meta}\nURL: ${url}\n\nReturn JSON: {"category":"string","instructor":"string","duration":"string","outcome":"string","differentiators":"string","accreditation":"string","level":"string"}`;
   const raw = await callOpenAI(system, user, 600);
@@ -236,6 +238,7 @@ Return ONLY valid JSON: {"headline":"...","body":"...","benefit1":"...","benefit
   const courseMeta = [
     courseData.siglas ? `Code/Acronym: ${courseData.siglas}` : "",
     courseData.nivel  ? `Level: ${courseData.nivel}` : "",
+    courseData.keywords5?.length ? `Keywords: ${courseData.keywords5.join(", ")}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: ${courseData.name}\n${courseMeta}\nOutcome: ${research.outcome}\nDifferentiators: ${research.differentiators}`;
   const raw = await callOpenAI(system, user, 800);
@@ -348,6 +351,15 @@ async function loadFontFace(name, src) {
   } catch { return false; }
 }
 
+function loadImage(src) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
 async function compositeAd(imageB64, copy, brandConfig, width, height) {
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
@@ -394,6 +406,16 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   if (bodySrc && await loadFontFace(bodyFontName, bodySrc))
     bodyFontFam = `"${bodyFontName}", system-ui, sans-serif`;
 
+  // Force-load web fonts (e.g. Exo 2 / Ubuntu via Google Fonts @import) — canvas text
+  // ignores @font-face rules until the font has actually been used/loaded once.
+  try {
+    await Promise.all([
+      document.fonts.load(`700 16px ${displayFont}`),
+      document.fonts.load(`400 16px ${bodyFontFam}`),
+      document.fonts.load(`700 16px ${bodyFontFam}`),
+    ]);
+  } catch { /* best effort — falls back to system font */ }
+
   const pad = Math.round(width * 0.07);
   ctx.textBaseline = "top";
 
@@ -439,46 +461,88 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   ctx.fillStyle = ctaFgColor;
   ctx.fillText(ctaStr, pad + ctaPadX, ctaBoxY + ctaPadY);
 
-  // Logo overlay (use white logo on dark bg, primary otherwise)
-  const logoAsset = brandConfig.logoWhite || brandConfig.logoPrimary;
-  const logoSrc = logoAsset?.data || (fontServerBase && logoAsset?.name ? `${fontServerBase}/${logoAsset.name}` : null);
-  if (logoSrc) {
-    await new Promise(resolve => {
-      const logoImg = new Image();
-      logoImg.onload = () => {
-        const lh = Math.round(height * 0.042);
-        const lw = Math.round(logoImg.naturalWidth * lh / Math.max(logoImg.naturalHeight, 1));
-        const margin = Math.round(width * 0.055);
-        const placement = brandConfig.adRules?.logoPlacement || "bottom-right";
-        const lx = placement.includes("right") ? width - lw - margin : margin;
-        const ly = placement.includes("top")   ? margin : height - lh - margin;
-        ctx.globalAlpha = 0.92; ctx.drawImage(logoImg, lx, ly, lw, lh); ctx.globalAlpha = 1;
-        resolve();
-      };
-      logoImg.onerror = resolve;
-      logoImg.src = logoSrc;
-    });
+  // Logo overlay — pick white/dark version by sampling mean luminance under the
+  // logo's bbox (spec: L = 0.299R + 0.587G + 0.114B, white logo if L < 140).
+  const resolveLogoSrc = asset => asset?.data || (fontServerBase && asset?.name ? `${fontServerBase}/${asset.name}` : null);
+  const logoWhiteSrc = resolveLogoSrc(brandConfig.logoWhite);
+  const logoDarkSrc  = resolveLogoSrc(brandConfig.logoDark || brandConfig.logoPrimary);
+  const refLogoSrc = logoWhiteSrc || logoDarkSrc;
+
+  if (refLogoSrc) {
+    const refLogoImg = await loadImage(refLogoSrc);
+    if (refLogoImg) {
+      const lh = Math.round(height * 0.042);
+      const lw = Math.round(refLogoImg.naturalWidth * lh / Math.max(refLogoImg.naturalHeight, 1));
+      const margin = Math.round(width * 0.055);
+      const placement = brandConfig.adRules?.logoPlacement || "bottom-right";
+      const lx = placement.includes("right") ? width - lw - margin : margin;
+      const ly = placement.includes("top")   ? margin : height - lh - margin;
+
+      let chosenSrc = logoWhiteSrc || logoDarkSrc;
+      if (logoWhiteSrc && logoDarkSrc) {
+        const sx = Math.max(0, Math.min(Math.round(lx), width - 1));
+        const sy = Math.max(0, Math.min(Math.round(ly), height - 1));
+        const sw = Math.max(1, Math.min(Math.round(lw), width - sx));
+        const sh = Math.max(1, Math.min(Math.round(lh), height - sy));
+        const { data } = ctx.getImageData(sx, sy, sw, sh);
+        let sum = 0;
+        for (let p = 0; p < data.length; p += 4) sum += 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+        const meanLuminance = sum / (data.length / 4);
+        chosenSrc = meanLuminance < 140 ? logoWhiteSrc : logoDarkSrc;
+      }
+
+      const logoImg = chosenSrc === refLogoSrc ? refLogoImg : await loadImage(chosenSrc);
+      if (logoImg) { ctx.globalAlpha = 0.92; ctx.drawImage(logoImg, lx, ly, lw, lh); ctx.globalAlpha = 1; }
+    }
   }
 
   return canvas.toDataURL("image/png");
 }
 
 // ─── CSV / XLSX PARSER ──────────────────────────────────────────────
+function stripDiacritics(s) {
+  return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function firstFiveKeywords(raw) {
+  return String(raw || "").split(",").map(k => k.trim()).filter(Boolean).slice(0, 5);
+}
+
+function detectDelimiter(headerLine) {
+  const semis = (headerLine.match(/;/g) || []).length;
+  const commas = (headerLine.match(/,/g) || []).length;
+  return semis > commas ? ";" : ",";
+}
+
+function buildColumnIndex(header) {
+  const norm = header.map(h => stripDiacritics(h).toLowerCase());
+  return {
+    siglasIdx:   norm.findIndex(h => /sigla|acronym|abbr|codigo/i.test(h)),
+    nivelIdx:    norm.findIndex(h => /nivel|level|grado/i.test(h)),
+    nameIdx:     norm.findIndex(h => /course|name|nombre|title|titulo/i.test(h)),
+    urlIdx:      norm.findIndex(h => /url|link|href/i.test(h)),
+    keywordsIdx: norm.findIndex(h => /keyword/i.test(h)),
+    precioIdx:   norm.findIndex(h => /precio|price/i.test(h)),
+  };
+}
+
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
-  const header = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/['"]/g, ""));
-  const siglasIdx = header.findIndex(h => /sigla|acronym|abbr|código|codigo/i.test(h));
-  const nivelIdx  = header.findIndex(h => /nivel|level|grado/i.test(h));
-  const nameIdx   = header.findIndex(h => /course|name|nombre|title/i.test(h));
-  const urlIdx    = header.findIndex(h => /url|link|href/i.test(h));
+  const delim = detectDelimiter(lines[0]);
+  const header = lines[0].split(delim).map(h => h.trim().replace(/['"]/g, ""));
+  const { siglasIdx, nivelIdx, nameIdx, urlIdx, keywordsIdx, precioIdx } = buildColumnIndex(header);
   return lines.slice(1).map(line => {
-    const cols = line.split(",").map(c => c.trim().replace(/^["']|["']$/g, ""));
+    const cols = line.split(delim).map(c => c.trim().replace(/^["']|["']$/g, ""));
+    const keywords = keywordsIdx >= 0 ? (cols[keywordsIdx] || "") : "";
     return {
       siglas: siglasIdx >= 0 ? (cols[siglasIdx] || "") : "",
       nivel:  nivelIdx  >= 0 ? (cols[nivelIdx]  || "") : "",
       name:   cols[nameIdx >= 0 ? nameIdx : (siglasIdx >= 0 || nivelIdx >= 0 ? -1 : 0)] || cols[0] || "",
       url:    cols[urlIdx  >= 0 ? urlIdx  : 1] || "",
+      precio: precioIdx >= 0 ? (cols[precioIdx] || "") : "",
+      keywords,
+      keywords5: firstFiveKeywords(keywords),
     };
   }).filter(r => r.name);
 }
@@ -496,17 +560,20 @@ async function parseFile(file) {
     const { default: readXlsxFile } = await import("read-excel-file/browser");
     const rows = await readXlsxFile(file);
     if (rows.length < 2) return [];
-    const header = rows[0].map(h => String(h || "").toLowerCase());
-    const siglasIdx = header.findIndex(h => /sigla|acronym|abbr|código|codigo/i.test(h));
-    const nivelIdx  = header.findIndex(h => /nivel|level|grado/i.test(h));
-    const nameIdx   = header.findIndex(h => /course|name|nombre|title/i.test(h));
-    const urlIdx    = header.findIndex(h => /url|link|href/i.test(h));
-    return rows.slice(1).map(row => ({
-      siglas: siglasIdx >= 0 ? String(row[siglasIdx] || "") : "",
-      nivel:  nivelIdx  >= 0 ? String(row[nivelIdx]  || "") : "",
-      name:   String(row[nameIdx >= 0 ? nameIdx : 0] || ""),
-      url:    String(row[urlIdx  >= 0 ? urlIdx  : 1] || ""),
-    })).filter(r => r.name);
+    const header = rows[0].map(h => String(h || ""));
+    const { siglasIdx, nivelIdx, nameIdx, urlIdx, keywordsIdx, precioIdx } = buildColumnIndex(header);
+    return rows.slice(1).map(row => {
+      const keywords = keywordsIdx >= 0 ? String(row[keywordsIdx] || "") : "";
+      return {
+        siglas: siglasIdx >= 0 ? String(row[siglasIdx] || "") : "",
+        nivel:  nivelIdx  >= 0 ? String(row[nivelIdx]  || "") : "",
+        name:   String(row[nameIdx >= 0 ? nameIdx : 0] || ""),
+        url:    String(row[urlIdx  >= 0 ? urlIdx  : 1] || ""),
+        precio: precioIdx >= 0 ? String(row[precioIdx] || "") : "",
+        keywords,
+        keywords5: firstFiveKeywords(keywords),
+      };
+    }).filter(r => r.name);
   }
   return [];
 }
@@ -688,11 +755,65 @@ const FORMATS = [
   { id: "square",    label: "Universal square",   dim: "1080×1080", ratio: "1:1"  },
   { id: "landscape", label: "Legacy landscape",   dim: "1200×628",  ratio: "1.9:1" },
 ];
+const EUROINNOVA_IMAGE_RULES = `No incluir texto ni logotipos en la imagen. Paleta: granate #B0263E, negro #202020, blanco. Sin degradados, sin formas orgánicas, bloques de color planos, bordes geométricos nítidos. Modelos de 20-40 años, ropa neutra, poses desenfadadas. Dejar la esquina superior izquierda (15% alto, 25% ancho) completamente limpia y de color plano, sin objetos — se reservará para superponer el logo.`;
+
 const DEFAULT_BRANDS = [
   { id: "b1", name: "Structuralia", tone: "Authoritative and precise", personality: "Technical, trustworthy", language: "es", headlineRules: "Start with action verb, max 8 words", bodyRules: "2-3 sentences, lead with transformation", forbiddenWords: "revolutionary, amazing, world-class" },
   { id: "b2", name: "EducaHub.ai",  tone: "Warm and aspirational",     personality: "Innovative, approachable", language: "es", headlineRules: "Focus on outcome, conversational, max 10 words", bodyRules: "Lead with benefit, mention flexibility", forbiddenWords: "guaranteed, best, incredible" },
   { id: "b3", name: "Phia",         tone: "Bold and visionary",         personality: "Cutting-edge, empowering", language: "en", headlineRules: "Future-focused, action-oriented, punchy", bodyRules: "Short and direct, emphasize AI advantage", forbiddenWords: "traditional, basic, generic" },
+  {
+    id: "b4", name: "Euroinnova",
+    tone: "Cercano, directo, amable, enérgico",
+    personality: "Cercano, directo, enérgico, práctico",
+    language: "es",
+    headlineRules: "Nombra el curso de forma directa, sin imperativos, sin MAYÚSCULAS SOSTENIDAS, frases cortas.",
+    bodyRules: "Frase de dolor/alivio: nombra un problema real y ofrece alivio a través del curso. Máx. 18 palabras. Sin imperativos, sin mayúsculas sostenidas, sin tecnicismos sin explicar.",
+    forbiddenWords: "imperativos, MAYÚSCULAS SOSTENIDAS, tecnicismos sin explicar, revolucionario, único en el mercado",
+    colors: { primary: "#B0263E", secondary: "#202020", accent: "#B0263E", background: "#FFFFFF", text_on_overlay: "#FFFFFF", cta_text: "#FFFFFF" },
+    fonts: { display: "Exo 2", body: "Ubuntu" },
+    brandImageStyle: EUROINNOVA_IMAGE_RULES,
+    adRules: { formats: ["feed_4x5", "story"], ctas: ["Solicitar información"], logoPlacement: "top-left", mustInclude: ["course_title"], neverInclude: ["degradados", "formas orgánicas"] },
+  },
 ];
+
+// ─── EUROINNOVA STYLE DIRECTIONS (pilot → replicate) ──────────────────
+// 5 fixed visual directions per the brand pipeline spec. Prompts are built
+// deterministically (no LLM call) so the winning style replicates identically
+// across every course — only titulo_curso / keywords_curso change.
+const STYLE_VARIANTS = [
+  {
+    id: "producto",
+    label: "Producto",
+    describe: (courseTitle, kw) => `Dirección "Producto": el granate #B0263E cubre aproximadamente el 65% del encuadre, panel blanco inferior vacío, foto profesional evocando: ${kw}. Curso: "${courseTitle}".`,
+  },
+  {
+    id: "split_diagonal",
+    label: "Split diagonal",
+    describe: (courseTitle, kw) => `Dirección "Split diagonal": mosaico geométrico diagonal con fotos recortadas representando cada uno de estos temas: ${kw}. Curso: "${courseTitle}".`,
+  },
+  {
+    id: "minimalista",
+    label: "Minimalista",
+    describe: (courseTitle, kw) => `Dirección "Minimalista": fondo negro #202020 sólido, bloque granate #B0263E inferior, foto en blanco y negro de alto contraste relacionada con: ${kw}. Curso: "${courseTitle}".`,
+  },
+  {
+    id: "editorial_duotono",
+    label: "Editorial dúotono",
+    describe: (courseTitle, kw) => `Dirección "Editorial dúotono": foto tratada enteramente en dúotono granate #B0263E / blanco, relacionada con: ${kw}. Curso: "${courseTitle}".`,
+  },
+  {
+    id: "grid_iconos",
+    label: "Grid de iconos",
+    describe: (courseTitle, kw) => `Dirección "Grid de iconos": chips redondeados con iconos representando cada uno de estos temas: ${kw}, sobre fondo granate #B0263E. Curso: "${courseTitle}".`,
+  },
+];
+
+function buildStyleVariantPrompt(styleId, brand, course, keywords5) {
+  const style = STYLE_VARIANTS.find(s => s.id === styleId);
+  const kw = (keywords5 || []).join(", ") || "formación online";
+  const commonRules = brand.brandImageStyle || EUROINNOVA_IMAGE_RULES;
+  return `${style.describe(course.name, kw)}\n\n${commonRules}`;
+}
 
 function StepIndicator({ step, total }) {
   return (
@@ -954,7 +1075,10 @@ function Generate({ brands, onBatchCreated }) {
     // Paso 3: Cargar cursos
     <div key={3} className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Cargar cursos</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Solo dos columnas: <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>course_name</code> y <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>url</code>. La IA hace el resto.</p>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>
+        Mínimo <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>course_name</code> / <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>url</code>.
+        Formato Euroinnova también soportado: <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>Título;Keywords Curso;Precio;Page URL</code> (delimitado por <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>;</code>) — se toman las 5 primeras keywords de cada curso y se usan en el diseño piloto. La IA hace el resto.
+      </p>
 
       <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.ods" onChange={handleFile} style={{ display: "none" }} />
 
@@ -979,35 +1103,47 @@ function Generate({ brands, onBatchCreated }) {
           <button style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 20px", borderRadius: 999 }} onClick={e => { e.stopPropagation(); fileRef.current?.click(); }}>Explorar archivo</button>
           <div style={{ marginTop: 12, fontSize: 11, color: T.textLight }}>↓ Descargar plantilla CSV</div>
         </div>
-      ) : (
+      ) : (() => {
+        const hasKw = cfg.courses.some(c => c.keywords5?.length);
+        const cols = hasKw ? "32px 70px 60px 1fr 1fr 1fr" : "32px 70px 80px 1fr 1fr";
+        const heads = hasKw ? ["#", "Siglas", "Nivel", "Nombre del curso", "Keywords (top 5)", "URL"] : ["#", "Siglas", "Nivel", "Nombre del curso", "URL"];
+        return (
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{cfg.courses.length} cursos detectados</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{cfg.courses.length} cursos detectados{hasKw ? " · con keywords" : ""}</span>
             <button onClick={() => { set("courses", []); set("csvText", ""); }} style={{ fontSize: 11, color: T.textMuted, background: "transparent" }}>Limpiar ×</button>
           </div>
           <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "32px 70px 80px 1fr 1fr", padding: "8px 16px", background: T.cream, borderBottom: `1px solid ${T.cardBorder}` }}>
-              {["#", "Siglas", "Nivel", "Nombre del curso", "URL"].map(h => <span key={h} style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, letterSpacing: "0.05em", textTransform: "uppercase" }}>{h}</span>)}
+            <div style={{ display: "grid", gridTemplateColumns: cols, padding: "8px 16px", background: T.cream, borderBottom: `1px solid ${T.cardBorder}` }}>
+              {heads.map(h => <span key={h} style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, letterSpacing: "0.05em", textTransform: "uppercase" }}>{h}</span>)}
             </div>
             {cfg.courses.slice(0, 6).map((c, i) => (
-              <div key={i} style={{ display: "grid", gridTemplateColumns: "32px 70px 80px 1fr 1fr", padding: "10px 16px", borderBottom: i < Math.min(cfg.courses.length, 6) - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
+              <div key={i} style={{ display: "grid", gridTemplateColumns: cols, padding: "10px 16px", borderBottom: i < Math.min(cfg.courses.length, 6) - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
                 <span style={{ fontSize: 11, color: T.textMuted }}>{i + 1}</span>
                 <span style={{ fontSize: 11, fontWeight: 600, color: T.accentDark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }}>{c.siglas || "—"}</span>
                 <span style={{ fontSize: 11, color: T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }}>{c.nivel || "—"}</span>
                 <span style={{ fontSize: 12, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 12 }}>{c.name}</span>
+                {hasKw && <span style={{ fontSize: 11, color: T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 12 }}>{c.keywords5?.join(", ") || "—"}</span>}
                 <span style={{ fontSize: 11, color: T.blueMid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.url || "—"}</span>
               </div>
             ))}
             {cfg.courses.length > 6 && <div style={{ padding: "8px 16px", fontSize: 11, color: T.textMuted, background: T.cream }}>+ {cfg.courses.length - 6} más cursos</div>}
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>,
 
     // Paso 4: Confirmar
     <div key={4} className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Listo para generar</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Revisa la configuración antes de lanzar.</p>
+
+      {!window.__OPENAI_KEY__ && (
+        <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
+          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Ejecuta <code>window.__OPENAI_KEY__ = 'sk-...'</code> en la consola antes de lanzar si quieres imágenes.
+        </div>
+      )}
 
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden", marginBottom: 20 }}>
         {[
@@ -1056,11 +1192,15 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const [items, setItems] = useState([]);
   const [phase, setPhase] = useState("researching");
   const [progress, setProgress] = useState(0);
-  const [ctrl, setCtrl] = useState("running"); // "running"|"paused"|"cancelled"|"done"
+  const [ctrl, setCtrl] = useState("running"); // "running"|"paused"|"cancelled"|"done"|"error"
   const [runKey, setRunKey] = useState(0);
+  const [pilotCandidates, setPilotCandidates] = useState([]);
+  const [pilotSelected, setPilotSelected] = useState(null);
+  const [pipelineError, setPipelineError] = useState("");
   const brand = brands.find(b => b.id === batch.config.brandId) || brands[0] || DEFAULT_BRANDS[0];
   const isPausedRef   = useRef(false);
   const isCancelledRef = useRef(false);
+  const pilotResolverRef = useRef(null);
 
   async function waitIfPaused() {
     while (isPausedRef.current && !isCancelledRef.current) {
@@ -1070,19 +1210,37 @@ function BatchProcessor({ batch, brands, onUpdate }) {
 
   function pause()   { isPausedRef.current = true;  setCtrl("paused"); }
   function resume()  { isPausedRef.current = false; setCtrl("running"); }
-  function cancel()  { isCancelledRef.current = true; isPausedRef.current = false; setCtrl("cancelled"); }
+  function cancel()  {
+    isCancelledRef.current = true; isPausedRef.current = false; setCtrl("cancelled");
+    if (pilotResolverRef.current) { pilotResolverRef.current(null); pilotResolverRef.current = null; }
+  }
   function restart() {
     isPausedRef.current   = false;
     isCancelledRef.current = false;
+    pilotResolverRef.current = null;
     setItems([]);
+    setPilotCandidates([]);
+    setPilotSelected(null);
+    setPipelineError("");
     setPhase("researching");
     setProgress(0);
     setCtrl("running");
     setRunKey(k => k + 1);
   }
+  function confirmPilotWinner() {
+    if (pilotSelected && pilotResolverRef.current) {
+      pilotResolverRef.current(pilotSelected);
+      pilotResolverRef.current = null;
+    }
+  }
 
   useEffect(() => {
-    runPipeline();
+    // Safety net: any error not already caught inline (network failure, unexpected
+    // exception, etc.) must still surface — never fail silently / hang the UI.
+    runPipeline().catch(err => {
+      setCtrl("error");
+      setPipelineError(err?.message || String(err));
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runKey]);
 
@@ -1090,6 +1248,16 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     const courses = batch.config.courses || [];
     const total = courses.length;
     const researched = [];
+    const hasKeywordsCSV = courses.some(c => c.keywords5?.length);
+    const variantCount = batch.config.variantCount || 1;
+
+    const selectedFormats = batch.config.formats || [];
+    const customDim = batch.config.customDim;
+    const formatList = [
+      ...selectedFormats.map(fid => ({ key: fid, ...(FORMAT_SIZES[fid] || { w: 1080, h: 1080, api: "1024x1024" }) })),
+      ...(customDim ? [{ key: customDim, ...customDimToSize(customDim) }] : []),
+    ];
+    const primaryApiSize = formatList[0]?.api || "1024x1024";
 
     setPhase("researching");
     for (let i = 0; i < total; i++) {
@@ -1097,32 +1265,116 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       if (isCancelledRef.current) return;
       const c = courses[i];
       setItems(prev => [...prev, { ...c, status: "researching", research: null }]);
-      const research = await researchCourse(c, c.url);
-      if (isCancelledRef.current) return;
-      researched.push({ ...c, research });
-      setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "researched", research } : it));
-      setProgress(Math.round(((i + 1) / total) * 35));
+      try {
+        const research = await researchCourse(c, c.url);
+        if (isCancelledRef.current) return;
+        researched.push({ ...c, research, status: "researched" });
+      } catch (err) {
+        researched.push({ ...c, status: "researchFailed", researchError: err?.message || "Error al investigar el curso" });
+      }
+      setItems(prev => prev.map((it, idx) => idx === i ? researched[i] : it));
+      setProgress(Math.round(((i + 1) / total) * 25));
     }
 
     await waitIfPaused();
     if (isCancelledRef.current) return;
 
+    // Pilot flow: only when the CSV carries per-course keywords AND image
+    // generation is available. Course 0 becomes the pilot — 5 fixed style
+    // directions are rendered for it, the user approves one, and that same
+    // style (deterministic prompt, only title/keywords swapped) replicates
+    // across the rest of the courses.
+    const usePilotFlow = hasKeywordsCSV && !!window.__OPENAI_KEY__ && researched.length > 0;
+    let winningStyleId = null;
+    let winningStyleLabel = null;
+    let pilotStartIdx = 0;
+
+    if (usePilotFlow && researched[0].status === "researchFailed") {
+      // Can't build a pilot design without research on course 0 — surface it and stop.
+      setCtrl("error");
+      setPipelineError(`No se pudo investigar el curso piloto: ${researched[0].researchError}`);
+      return;
+    }
+
+    if (usePilotFlow) {
+      setPhase("pilot-copy");
+      const pilotCourse = researched[0];
+      let pilotCopy;
+      try {
+        pilotCopy = await generateAdCopy(brand, batch.config, pilotCourse, pilotCourse.research || {});
+      } catch (err) {
+        researched[0] = { ...pilotCourse, status: "copyFailed", copyError: err?.message || "Error al generar copy piloto" };
+        setItems(prev => prev.map((it, idx) => idx === 0 ? researched[0] : it));
+        setCtrl("error");
+        setPipelineError(`No se pudo generar el copy del curso piloto: ${err?.message || err}`);
+        return;
+      }
+      if (isCancelledRef.current) return;
+      researched[0] = { ...pilotCourse, status: "generated", copies: [pilotCopy] };
+      setItems(prev => prev.map((it, idx) => idx === 0 ? researched[0] : it));
+
+      setPhase("pilot-imaging");
+      const candidates = [];
+      for (const style of STYLE_VARIANTS) {
+        await waitIfPaused();
+        if (isCancelledRef.current) return;
+        try {
+          const prompt = buildStyleVariantPrompt(style.id, brand, pilotCourse, pilotCourse.keywords5);
+          const imageB64 = await generateImage(prompt, primaryApiSize);
+          if (isCancelledRef.current) return;
+          const composited = {};
+          for (const fmt of formatList) composited[fmt.key] = await compositeAd(imageB64, pilotCopy, brand, fmt.w, fmt.h);
+          candidates.push({ styleId: style.id, label: style.label, composited });
+        } catch (err) {
+          candidates.push({ styleId: style.id, label: style.label, error: err.message });
+        }
+        setPilotCandidates([...candidates]);
+        setProgress(25 + Math.round((candidates.length / STYLE_VARIANTS.length) * 20));
+      }
+      if (isCancelledRef.current) return;
+
+      setPhase("pilot-review");
+      const chosenId = await new Promise(resolve => { pilotResolverRef.current = resolve; });
+      if (isCancelledRef.current || !chosenId) return;
+      winningStyleId = chosenId;
+      winningStyleLabel = STYLE_VARIANTS.find(s => s.id === chosenId)?.label || null;
+
+      const winner = candidates.find(c => c.styleId === chosenId);
+      researched[0] = {
+        ...researched[0], status: "imaged",
+        imagePrompt: buildStyleVariantPrompt(chosenId, brand, pilotCourse, pilotCourse.keywords5),
+        composited: winner?.composited || {},
+      };
+      setItems(prev => prev.map((it, idx) => idx === 0 ? researched[0] : it));
+      pilotStartIdx = 1;
+      setProgress(45);
+    }
+
+    const copyBase = usePilotFlow ? 45 : 25;
+    const remainingCount = Math.max(1, researched.length - pilotStartIdx);
+
     setPhase("generating");
-    const variantCount = batch.config.variantCount || 1;
-    for (let i = 0; i < researched.length; i++) {
+    for (let i = pilotStartIdx; i < researched.length; i++) {
       await waitIfPaused();
       if (isCancelledRef.current) return;
       const c = researched[i];
-      const variants = [];
-      for (let v = 0; v < variantCount; v++) {
-        await waitIfPaused();
-        if (isCancelledRef.current) return;
-        const copy = await generateAdCopy(brand, batch.config, c, c.research);
-        variants.push(copy);
+      if (c.status === "researchFailed") {
+        setProgress(copyBase + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 25));
+        continue;
       }
-      researched[i] = { ...c, status: "generated", copies: variants };
+      try {
+        const variants = [];
+        for (let v = 0; v < variantCount; v++) {
+          await waitIfPaused();
+          if (isCancelledRef.current) return;
+          variants.push(await generateAdCopy(brand, batch.config, c, c.research || {}));
+        }
+        researched[i] = { ...c, status: "generated", copies: variants };
+      } catch (err) {
+        researched[i] = { ...c, status: "copyFailed", copyError: err?.message || "Error al generar copy" };
+      }
       setItems(prev => prev.map((it, idx) => idx === i ? researched[i] : it));
-      setProgress(35 + Math.round(((i + 1) / researched.length) * 35));
+      setProgress(copyBase + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 25));
     }
 
     await waitIfPaused();
@@ -1131,22 +1383,20 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     // Image generation (requires window.__OPENAI_KEY__)
     if (window.__OPENAI_KEY__) {
       setPhase("imaging");
-      const selectedFormats = batch.config.formats || [];
-      const customDim = batch.config.customDim;
-      const formatList = [
-        ...selectedFormats.map(fid => ({ key: fid, ...(FORMAT_SIZES[fid] || { w: 1080, h: 1080, api: "1024x1024" }) })),
-        ...(customDim ? [{ key: customDim, ...customDimToSize(customDim) }] : []),
-      ];
-      const primaryApiSize = formatList[0]?.api || "1024x1024";
-
-      for (let i = 0; i < researched.length; i++) {
+      for (let i = pilotStartIdx; i < researched.length; i++) {
         await waitIfPaused();
         if (isCancelledRef.current) return;
         const item = researched[i];
+        if (item.status === "researchFailed" || item.status === "copyFailed") {
+          setProgress(70 + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 30));
+          continue;
+        }
         const firstCopy = Array.isArray(item.copies) ? item.copies[0] : {};
         setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging" } : it));
         try {
-          const imagePrompt = await generateImagePrompt(brand, item, item.research || {}, firstCopy);
+          const imagePrompt = winningStyleId
+            ? buildStyleVariantPrompt(winningStyleId, brand, item, item.keywords5)
+            : await generateImagePrompt(brand, item, item.research || {}, firstCopy);
           if (isCancelledRef.current) return;
           const imageB64 = await generateImage(imagePrompt, primaryApiSize);
           if (isCancelledRef.current) return;
@@ -1160,7 +1410,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           researched[i] = { ...item, status: "imageFailed", imageError: err.message };
         }
         setItems(prev => prev.map((it, idx) => idx === i ? researched[i] : it));
-        setProgress(70 + Math.round(((i + 1) / researched.length) * 30));
+        setProgress(70 + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 30));
       }
     }
 
@@ -1168,13 +1418,19 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     setPhase("done");
     setProgress(100);
     const allFormats = [...(batch.config.formats || []), ...(batch.config.customDim ? [batch.config.customDim] : [])];
-    onUpdate(batch.id, { status: "review", adsCount: researched.length * allFormats.length * variantCount, items: researched });
+    onUpdate(batch.id, {
+      status: "review",
+      adsCount: researched.length * allFormats.length * variantCount,
+      items: researched,
+      config: { ...batch.config, winningStyleId, winningStyleLabel },
+    });
   }
 
-  const done = items.filter(it => ["generated","imaged","imageFailed"].includes(it.status)).length;
+  const done = items.filter(it => ["generated","imaged","imageFailed","researchFailed","copyFailed"].includes(it.status)).length;
+  const missingOpenAIKey = !window.__OPENAI_KEY__;
   const total = batch.config.courses?.length || 0;
-  const barColor = ctrl === "cancelled" ? T.coral : ctrl === "paused" ? T.textMuted : phase === "done" ? T.teal : T.text;
-  const phaseLabel = ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
+  const barColor = ctrl === "error" ? T.coral : ctrl === "cancelled" ? T.coral : ctrl === "paused" ? T.textMuted : phase === "done" ? T.teal : T.text;
+  const phaseLabel = ctrl === "error" ? "Error" : ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "pilot-copy" ? "Generando copy piloto..." : phase === "pilot-imaging" ? "Generando 5 diseños piloto..." : phase === "pilot-review" ? "Esperando aprobación de diseño" : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
 
   return (
     <div className="fade-in" style={{ padding: "40px 32px", maxWidth: 780, flex: 1 }}>
@@ -1205,7 +1461,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
               </button>
             </>
           )}
-          {(ctrl === "cancelled" || ctrl === "done") && (
+          {(ctrl === "cancelled" || ctrl === "done" || ctrl === "error") && (
             <button onClick={restart} style={{ fontSize: 12, fontWeight: 600, padding: "6px 16px", borderRadius: 999, background: T.text, color: T.white, border: "none" }}>
               ↺ Repetir
             </button>
@@ -1213,6 +1469,17 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         </div>
       </div>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>{brand?.name} · {total} cursos · {batch.config.formats?.length || 1} formato{batch.config.formats?.length !== 1 ? "s" : ""}</p>
+
+      {ctrl === "error" && (
+        <div style={{ padding: "12px 16px", background: T.statusFail.bg, border: `1px solid ${T.accent}`, borderRadius: 10, marginBottom: 20, fontSize: 12, color: T.statusFail.text, lineHeight: 1.5 }}>
+          <strong>Error:</strong> {pipelineError || "El lote se detuvo por un error inesperado."}
+        </div>
+      )}
+      {missingOpenAIKey && ctrl !== "error" && (
+        <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
+          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Ejecuta <code>window.__OPENAI_KEY__ = 'sk-...'</code> en la consola y repite el lote.
+        </div>
+      )}
 
       <div style={{ background: T.cardBorder, borderRadius: 999, height: 6, marginBottom: 8 }}>
         <div style={{ width: `${progress}%`, height: 6, borderRadius: 999, background: barColor, transition: "width 0.4s ease, background 0.3s ease" }} />
@@ -1222,16 +1489,64 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         <span style={{ fontSize: 11, color: T.textMuted }}>{done}/{total} listos</span>
       </div>
 
+      {(phase === "pilot-imaging" || phase === "pilot-review") && (
+        <div style={{ marginBottom: 28 }}>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>Elige el diseño ganador</div>
+            <div style={{ fontSize: 12, color: T.textMuted }}>
+              {phase === "pilot-imaging"
+                ? `Generando 5 direcciones de diseño para "${items[0]?.name || "el curso piloto"}"…`
+                : "Este diseño se replicará en el resto de cursos del CSV, cambiando solo título y keywords."}
+            </div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+            {STYLE_VARIANTS.map(style => {
+              const cand = pilotCandidates.find(c => c.styleId === style.id);
+              const thumb = cand?.composited ? Object.values(cand.composited)[0] : null;
+              const isSelected = pilotSelected === style.id;
+              const canSelect = phase === "pilot-review" && !!thumb;
+              return (
+                <div key={style.id}
+                  onClick={() => { if (canSelect) setPilotSelected(style.id); }}
+                  style={{ width: 150, cursor: canSelect ? "pointer" : "default", background: T.card, borderRadius: 12, overflow: "hidden", border: `2px solid ${isSelected ? T.teal : T.cardBorder}`, boxShadow: isSelected ? "0 0 0 3px rgba(96,191,184,0.15)" : "none", transition: "border-color 0.15s, box-shadow 0.15s" }}>
+                  <div style={{ position: "relative", width: 150, height: 188, background: T.cream, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {thumb
+                      ? <img src={thumb} alt={style.label} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                      : cand?.error
+                        ? <span style={{ fontSize: 10, color: T.statusFail.text, padding: 8, textAlign: "center" }}>Error</span>
+                        : <div className="spin" style={{ width: 18, height: 18, border: `2px solid ${T.cardBorder}`, borderTopColor: T.textMuted, borderRadius: "50%" }} />
+                    }
+                    {isSelected && (
+                      <div style={{ position: "absolute", top: 8, right: 8, width: 22, height: 22, borderRadius: "50%", background: T.teal, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff", fontWeight: 700 }}>✓</div>
+                    )}
+                  </div>
+                  <div style={{ padding: "8px 10px", borderTop: `1px solid ${T.cardBorder}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{style.label}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {phase === "pilot-review" && (
+            <button onClick={confirmPilotWinner} disabled={!pilotSelected}
+              style={{ marginTop: 16, background: pilotSelected ? T.text : T.cardBorder, color: pilotSelected ? T.white : T.textMuted, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, cursor: pilotSelected ? "pointer" : "not-allowed" }}>
+              Confirmar diseño ganador →
+            </button>
+          )}
+        </div>
+      )}
+
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
         {items.map((it, i) => {
           const isImaging   = it.status === "imaging";
           const isImaged    = it.status === "imaged";
-          const isFailed    = it.status === "imageFailed";
+          const isFailed    = it.status === "imageFailed" || it.status === "researchFailed" || it.status === "copyFailed";
           const isGenerated = it.status === "generated";
           const isResearching = it.status === "researching";
           const dotBg = isImaged ? T.teal : isFailed ? T.coral : isImaging ? T.blueMid : isGenerated ? T.accent : isResearching ? T.blueMid : T.cardBorder;
           const firstThumb = it.composited ? Object.values(it.composited)[0] : null;
-          const statusLabel = isImaged ? "Imagen lista" : isFailed ? `Error: ${it.imageError?.slice(0,40)}` : isImaging ? "Generando imagen…" : isGenerated ? "Copy listo" : it.status === "researched" ? "Investigado" : isResearching ? "Investigando…" : "En cola";
+          const failMsg = it.status === "researchFailed" ? it.researchError : it.status === "copyFailed" ? it.copyError : it.imageError;
+          const statusLabel = isImaged ? "Imagen lista" : isFailed ? `Error: ${failMsg?.slice(0,40)}` : isImaging ? "Generando imagen…" : isGenerated ? "Copy listo" : it.status === "researched" ? "Investigado" : isResearching ? "Investigando…" : "En cola";
           return (
             <div key={i} style={{ display: "flex", alignItems: "center", padding: "10px 18px", borderBottom: i < items.length - 1 ? `1px solid ${T.cardBorder}` : "none", gap: 12 }}>
               <div style={{ width: 16, height: 16, borderRadius: "50%", background: dotBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -1657,7 +1972,7 @@ function BrandsScreen({ brands, onSave }) {
             {brands.map((b, i) => (
               <button key={b.id} onClick={() => { setSelectedBrand(b.id); setActiveTab("Identidad"); }}
                 style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", background: selectedBrand === b.id ? T.text : "transparent", borderBottom: i < brands.length - 1 ? `1px solid ${T.cardBorder}` : "none", textAlign: "left" }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: b.id === "b1" ? "#2672ea" : b.id === "b2" ? "#1b883c" : "#7f55e1", flexShrink: 0 }} />
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: b.colors?.primary || (b.id === "b1" ? "#2672ea" : b.id === "b2" ? "#1b883c" : "#7f55e1"), flexShrink: 0 }} />
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 500, color: selectedBrand === b.id ? T.cream : T.text }}>{b.name}</div>
                   <div style={{ fontSize: 10, color: selectedBrand === b.id ? "rgba(255,255,255,0.5)" : T.textMuted }}>{b.language?.toUpperCase() || "ES"}</div>
@@ -1930,6 +2245,7 @@ function BatchDetail({ batch, onBack }) {
             ["CTAs",            batch.config?.ctas?.join(" / ")],
             ["Formatos",        batch.config?.formats?.map(f => FORMATS.find(x => x.id === f)?.label).join(", ")],
             ["Cursos",          `${batch.config?.courses?.length || 0} cargados`],
+            ...(batch.config?.winningStyleLabel ? [["Diseño ganador (piloto)", batch.config.winningStyleLabel]] : []),
           ].map(([k, v]) => (
             <div key={k}>
               <div style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 3 }}>{k}</div>
