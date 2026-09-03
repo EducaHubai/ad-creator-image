@@ -389,17 +389,31 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
 async function generateImage(prompt, apiSize) {
   const key = getOpenAIKey();
   if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  // No response_format: some accounts (gpt-image-1) reject the param entirely and
+  // always return b64_json; others (dall-e-3) default to a url. Handle both.
   const res = await fetch(`${OPENAI_BASE}/v1/images/generations`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: apiSize, response_format: "b64_json" }),
+    body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: apiSize }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(`OpenAI ${res.status}: ${err.error?.message || "image generation failed"}`);
   }
   const data = await res.json();
-  return data.data?.[0]?.b64_json || null;
+  const result = data.data?.[0];
+  if (!result) return null;
+  if (result.b64_json) return result.b64_json;
+  if (result.url) {
+    const imgRes = await fetch(result.url);
+    const blob = await imgRes.blob();
+    return new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.replace(/^data:image\/\w+;base64,/, ""));
+      reader.readAsDataURL(blob);
+    });
+  }
+  return null;
 }
 
 async function loadFontFace(name, src) {
