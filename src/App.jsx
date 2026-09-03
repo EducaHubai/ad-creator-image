@@ -1,6 +1,5 @@
 
 import { useState, useEffect, useRef, createContext, useContext } from "react";
-import { supabase, VIEWS } from "./lib/supabase";
 
 // ─── DESIGN TOKENS — EDUCA EDTECH Group ───────────────────────────────
 const LIGHT = {
@@ -752,30 +751,15 @@ const TIME_SAVED_TOOLTIP =
 
 function Dashboard({ batches, onNewBatch, onNav }) {
   const T = useTheme();
-  const [totals, setTotals] = useState({
+  // Supabase stats endpoint is currently unreachable (invalid TLS cert on
+  // supabase-api.educahub.ai) — disabled until that's fixed, cards show 0.
+  const totals = {
     batches_total: 0,
     creatives_total: 0,
     formats_total: 0,
     brands_total: 0,
     time_saved_hours: 0,
-  });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const { data, error } = await supabase
-        .from(VIEWS.totals)
-        .select("*")
-        .single();
-      if (cancelled) return;
-      if (error) {
-        console.warn("[dashboard] Error leyendo totales de Supabase:", error.message);
-        return;
-      }
-      if (data) setTotals(data);
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  };
 
   const stats = [
     { v: totals.batches_total,                                         l: "Lotes creados" },
@@ -1645,7 +1629,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
                     {thumb
                       ? <img src={thumb} alt={style.label} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       : cand?.error
-                        ? <span style={{ fontSize: 10, color: T.statusFail.text, padding: 8, textAlign: "center" }}>Error</span>
+                        ? <span style={{ fontSize: 10, color: T.statusFail.text, padding: 8, textAlign: "center", lineHeight: 1.4 }}>{cand.error}</span>
                         : <div className="spin" style={{ width: 18, height: 18, border: `2px solid ${T.cardBorder}`, borderTopColor: T.textMuted, borderRadius: "50%" }} />
                     }
                     {isSelected && (
