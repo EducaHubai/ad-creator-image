@@ -155,15 +155,15 @@ const globalCSS = `
 `;
 
 // ─── API HELPERS ────────────────────────────────────────────────────
-// Direct OpenAI only — VITE_OPENAI_API_KEY (build var) or window.__OPENAI_KEY__ (console).
-function getOpenAIKey() { return window.__OPENAI_KEY__ || import.meta.env.VITE_OPENAI_API_KEY || ""; }
+// Direct OpenAI only — OPENAI_API_KEY (build var) or window.__OPENAI_KEY__ (console).
+function getOpenAIKey() { return window.__OPENAI_KEY__ || import.meta.env.OPENAI_API_KEY || import.meta.env.VITE_OPENAI_API_KEY || ""; }
 function hasApiKey()    { return !!getOpenAIKey(); }
 
 const OPENAI_BASE = "https://api.openai.com";
 
 async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "gpt-4o") {
   const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura VITE_OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
   const res = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -186,7 +186,7 @@ async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "
 
 async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000, model = "gpt-4o") {
   const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura VITE_OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
   const res = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -389,7 +389,7 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
 
 async function generateImage(prompt, apiSize) {
   const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura VITE_OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
   const res = await fetch(`${OPENAI_BASE}/v1/images/generations`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -1272,7 +1272,7 @@ function Generate({ brands, onBatchCreated }) {
 
       {!hasApiKey() && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_OPENAI_API_KEY</code> en Coolify (o <code>window.__OPENAI_KEY__</code> en consola) antes de lanzar si quieres imágenes.
+          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>OPENAI_API_KEY</code> en Coolify (o <code>window.__OPENAI_KEY__</code> en consola) antes de lanzar si quieres imágenes.
         </div>
       )}
 
@@ -1609,7 +1609,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       )}
       {missingApiKey && ctrl !== "error" && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_OPENAI_API_KEY</code> en Coolify y repite el lote.
+          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>OPENAI_API_KEY</code> en Coolify y repite el lote.
         </div>
       )}
 
