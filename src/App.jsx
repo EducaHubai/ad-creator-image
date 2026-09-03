@@ -1,25 +1,27 @@
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, createContext, useContext } from "react";
+import { supabase, VIEWS } from "./lib/supabase";
 
 // ─── DESIGN TOKENS — EDUCA EDTECH Group ───────────────────────────────
-const T = {
-  sidebar:    "#202020",
-  sidebarText:"#BABABA",
-  sidebarAct: "#FFFFFF",
-  cream:      "#F4F4F4",       // app background (gray-soft)
+const LIGHT = {
+  sidebar:    "#FFFFFF",
+  sidebarText:"#666666",
+  sidebarAct: "#202020",
+  sidebarBorder: "1px solid #E0E0E0",
+  cream:      "#F4F4F4",
   card:       "#FFFFFF",
   cardBorder: "#E0E0E0",
-  text:       "#202020",       // ee-black
-  textMuted:  "#666666",       // ee-gray-text
-  textLight:  "#BABABA",       // ee-gray-icon
-  accent:     "#963058",       // burdeos — primary CTA / highlight
-  accentDark: "#FFFFFF",       // text on burdeos
-  teal:       "#60BFB8",       // secondary accent / success
-  tealText:   "#2A7A73",       // dark teal for text on teal-tinted bg
-  coral:      "#E96A73",       // warm secondary
+  text:       "#202020",
+  textMuted:  "#666666",
+  textLight:  "#BABABA",
+  accent:     "#963058",
+  accentDark: "#FFFFFF",
+  teal:       "#60BFB8",
+  tealText:   "#2A7A73",
+  coral:      "#E96A73",
   blueDark:   "#244A80",
-  blueMid:    "#2E7ABE",       // links, interactive
-  ctaDark:    "#202020",       // dark banner bg sections
+  blueMid:    "#2E7ABE",
+  ctaDark:    "#202020",
   white:      "#FFFFFF",
   gradient:   "linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%)",
   statusDone: { bg: "#EAF7F6", text: "#2A7A73" },
@@ -27,6 +29,57 @@ const T = {
   statusFail: { bg: "#FFE6E8", text: "#963058" },
   statusPend: { bg: "#F4F4F4", text: "#666666" },
 };
+
+const DARK = {
+  sidebar:    "#1A1A1A",
+  sidebarText:"#BABABA",
+  sidebarAct: "#FFFFFF",
+  sidebarBorder: "none",
+  cream:      "#202020",
+  card:       "#2A2A2A",
+  cardBorder: "#3A3A3A",
+  text:       "#FFFFFF",
+  textMuted:  "#BABABA",
+  textLight:  "#5A5A5A",
+  accent:     "#963058",
+  accentDark: "#FFFFFF",
+  teal:       "#60BFB8",
+  tealText:   "#60BFB8",
+  coral:      "#E96A73",
+  blueDark:   "#244A80",
+  blueMid:    "#60BFB8",
+  ctaDark:    "#F4F4F4",
+  white:      "#202020",
+  gradient:   "linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%)",
+  statusDone: { bg: "#1A3330", text: "#60BFB8" },
+  statusRun:  { bg: "#1A2A3A", text: "#60BFB8" },
+  statusFail: { bg: "#3A1A1E", text: "#E96A73" },
+  statusPend: { bg: "#2A2A2A", text: "#BABABA" },
+};
+
+// ─── THEME CONTEXT ────────────────────────────────────────────────────
+const ThemeContext = createContext({ tokens: LIGHT, themeName: "light", toggle: () => {} });
+function useTheme() { return useContext(ThemeContext).tokens; }
+function useThemeName() { return useContext(ThemeContext).themeName; }
+function useThemeToggle() { return useContext(ThemeContext).toggle; }
+
+function IcoSun({ s = 14 }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+      <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+    </svg>
+  );
+}
+function IcoMoon({ s = 14 }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+  );
+}
 
 const globalCSS = `
   @import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@400;700&family=Ubuntu:wght@400;700&display=swap');
@@ -40,23 +93,24 @@ const globalCSS = `
   @font-face { font-family:"Lato";  src:url("/fonts/Lato-Bold.ttf")     format("truetype"); font-weight:700; font-display:swap; }
   @font-face { font-family:"Lato";  src:url("/fonts/Lato-BoldItalic.ttf") format("truetype"); font-weight:700; font-style:italic; font-display:swap; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body { font-family: "Lato", "Calibri", system-ui, -apple-system, sans-serif; background: ${T.cream}; color: ${T.text}; -webkit-font-smoothing: antialiased; }
+  html, body, #root { width: 100%; height: 100%; }
+  body { font-family: "Lato", "Calibri", system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: ${T.cardBorder}; border-radius: 2px; }
+  ::-webkit-scrollbar-thumb { background: rgba(150,150,150,0.3); border-radius: 2px; }
   button { cursor: pointer; border: none; outline: none; font-family: inherit; }
   input, textarea, select { font-family: inherit; outline: none; }
   .fade-in { animation: fadeIn 0.25s cubic-bezier(0.22,1,0.36,1) forwards; }
   @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .gradient-line { height: 3px; width: 100%; background: ${T.gradient}; display: block; border: 0; }
+  .gradient-line { height: 3px; width: 100%; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); display: block; border: 0; }
 
-  /* ── Dashboard body ── */
-  .dash-body { padding: 36px 40px; max-width: 860px; flex: 1; }
-  @media (max-width: 767px) { .dash-body { padding: 24px 20px; } }
-  @media (max-width: 479px) { .dash-body { padding: 20px 16px; } }
+  /* ── Main content area ── */
+  .dash-body { padding: 36px 40px; flex: 1; }
+  .content-area { padding: 40px 40px; flex: 1; }
+  @media (max-width: 767px) { .dash-body { padding: 24px 20px; } .content-area { padding: 24px 20px; } }
+  @media (max-width: 479px) { .dash-body { padding: 20px 16px; } .content-area { padding: 20px 16px; } }
 
   /* ── Responsive layout ── */
   .app-shell   { display: flex; min-height: 100vh; }
@@ -101,25 +155,19 @@ const globalCSS = `
 `;
 
 // ─── API HELPERS ────────────────────────────────────────────────────
-async function callClaude(systemPrompt, userMessage, maxTokens = 1000) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": window.__ANTHROPIC_KEY__ || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
-  const data = await res.json();
-  return data.content?.[0]?.text || "";
+function getLiteLLMKey() {
+  return window.__LITELLM_KEY__ || import.meta.env.VITE_LITELLM_API_KEY || "";
+}
+function getLiteLLMBase() {
+  const base = window.__LITELLM_BASE__ || import.meta.env.VITE_LITELLM_BASE_URL || "";
+  if (!base) throw new Error("Sin LiteLLM base URL. Configura VITE_LITELLM_BASE_URL en Coolify.");
+  return base.replace(/\/$/, "");
 }
 
-async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "gpt-4o") {
-  const key = window.__OPENAI_KEY__;
-  if (!key) throw new Error("Sin OpenAI key. Ejecuta: window.__OPENAI_KEY__ = 'sk-...' en consola.");
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function callLiteLLM(systemPrompt, userMessage, maxTokens = 1000, model = "gemini-2.5-flash") {
+  const key = getLiteLLMKey();
+  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
+  const res = await fetch(`${getLiteLLMBase()}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -133,20 +181,20 @@ async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
+    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
 }
 
-async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000) {
-  const key = window.__OPENAI_KEY__;
-  if (!key) throw new Error("Sin OpenAI key. Ejecuta: window.__OPENAI_KEY__ = 'sk-...' en consola.");
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function callLiteLLMVision(systemPrompt, contentBlocks, maxTokens = 1000, model = "gemini-2.5-flash") {
+  const key = getLiteLLMKey();
+  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
+  const res = await fetch(`${getLiteLLMBase()}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "gpt-4o",
+      model,
       max_tokens: maxTokens,
       messages: [
         { role: "system", content: systemPrompt },
@@ -156,7 +204,7 @@ async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
+    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
   }
   const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
@@ -181,12 +229,12 @@ async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
   "extracted_notes": "important nuances"
 }`;
 
-  const fileBlocks = pdfBase64Array.map((b64, i) => ({
-    type: "file",
-    file: { filename: `brand_doc_${i + 1}.pdf`, file_data: `data:application/pdf;base64,${b64}` },
+  const fileBlocks = pdfBase64Array.map((b64) => ({
+    type: "image_url",
+    image_url: { url: `data:application/pdf;base64,${b64}` },
   }));
 
-  const raw = await callOpenAIVision(
+  const raw = await callLiteLLMVision(
     system,
     [...fileBlocks, { type: "text", text: `Extract brand config.${existingBrandName ? ` Brand: "${existingBrandName}".` : ""} Return only JSON.` }],
     2000
@@ -203,7 +251,7 @@ async function researchCourse(courseData, url) {
     courseData.keywords5?.length ? `Keywords: ${courseData.keywords5.join(", ")}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: "${courseData.name}"\n${meta}\nURL: ${url}\n\nReturn JSON: {"category":"string","instructor":"string","duration":"string","outcome":"string","differentiators":"string","accreditation":"string","level":"string"}`;
-  const raw = await callOpenAI(system, user, 600);
+  const raw = await callLiteLLM(system, user, 600);
   try { return JSON.parse(raw.replace(/```json|```/g, "")); }
   catch { return { category: "Education", instructor: "Expert Faculty", duration: "Online", outcome: `Master ${courseData.name}`, differentiators: "Flexible online learning", accreditation: "Certified", level: courseData.nivel || "Professional" }; }
 }
@@ -241,9 +289,35 @@ Return ONLY valid JSON: {"headline":"...","body":"...","benefit1":"...","benefit
     courseData.keywords5?.length ? `Keywords: ${courseData.keywords5.join(", ")}` : "",
   ].filter(Boolean).join("\n");
   const user = `Course: ${courseData.name}\n${courseMeta}\nOutcome: ${research.outcome}\nDifferentiators: ${research.differentiators}`;
-  const raw = await callOpenAI(system, user, 800);
+  const raw = await callLiteLLM(system, user, 800);
   try { return JSON.parse(raw.replace(/```json|```/g, "")); }
   catch { return { headline: `Master ${courseData.name}`, body: `Transform your career.`, benefit1: "Flexible schedule", benefit2: "Industry certificate", cta: campaignConfig.ctas[0] || "Learn more", painPoint: campaignConfig.painPoints[0] || "Level up" }; }
+}
+
+function resizeImageFile(file, maxDim = 768, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = ev.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 // ─── BRAND VISUAL ANALYSIS ───────────────────────────────────────────
@@ -253,7 +327,7 @@ async function analyzeRefImages(refImages) {
     type: "image_url",
     image_url: { url: img.data || img, detail: "low" },
   }));
-  const result = await callOpenAIVision(
+  const result = await callLiteLLMVision(
     "You are a visual brand analyst. Analyze the reference images and return a concise 2-3 sentence visual aesthetic descriptor: color mood, lighting style, composition, photographic feel. Use concrete visual language suitable for image generation prompts. Return only the descriptor text.",
     [...imageBlocks, { type: "text", text: "Describe the visual aesthetic for ad image generation prompts." }],
     250
@@ -313,33 +387,23 @@ HARD RULES: NO text, NO logos, NO typography, NO people holding phones or signs,
 Color grading should harmonize with the brand palette above.
 Specify: mood, lighting quality, composition, depth of field, photographic style.`;
 
-  return (await callOpenAI(system, user, 280)).trim();
+  return (await callLiteLLM(system, user, 280)).trim();
 }
 
 async function generateImage(prompt, apiSize) {
-  const key = window.__OPENAI_KEY__;
-  if (!key) throw new Error("Sin OpenAI key. Ejecuta: window.__OPENAI_KEY__ = 'sk-...' en consola.");
-  const res = await fetch("https://api.openai.com/v1/images/generations", {
+  const key = getLiteLLMKey();
+  if (!key) throw new Error("Sin LiteLLM key. Configura VITE_LITELLM_API_KEY en Coolify.");
+  const res = await fetch(`${getLiteLLMBase()}/v1/images/generations`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "dall-e-2", prompt, n: 1, size: "1024x1024" }),
+    body: JSON.stringify({ model: "gemini-3.1-flash-image-preview", prompt, n: 1, size: apiSize, response_format: "b64_json" }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "image generation failed"}`);
+    throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "image generation failed"}`);
   }
   const data = await res.json();
-  // API returns URL by default — fetch it and convert to base64 for Canvas use
-  const imageUrl = data.data?.[0]?.url || data.data?.[0]?.b64_json || null;
-  if (!imageUrl) return null;
-  if (!imageUrl.startsWith("http")) return imageUrl; // already b64
-  const imgRes = await fetch(imageUrl);
-  const blob = await imgRes.blob();
-  return new Promise(resolve => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result.replace(/^data:image\/\w+;base64,/, ""));
-    reader.readAsDataURL(blob);
-  });
+  return data.data?.[0]?.b64_json || null;
 }
 
 async function loadFontFace(name, src) {
@@ -580,6 +644,7 @@ async function parseFile(file) {
 
 // ─── STATUS CHIP ────────────────────────────────────────────────────
 function Chip({ status }) {
+  const T = useTheme();
   const map = { done: T.statusDone, running: T.statusRun, failed: T.statusFail, pending: T.statusPend, generating: T.statusRun, review: { bg: "#F8E8EE", text: "#963058" }, exported: T.statusDone };
   const labels = { done:"Listo", running:"Ejecutando", failed:"Fallido", pending:"Pendiente", generating:"Generando", review:"Revisión", exported:"Exportado" };
   const c = map[status?.toLowerCase()] || T.statusPend;
@@ -592,6 +657,9 @@ function Chip({ status }) {
 
 // ─── SIDEBAR ────────────────────────────────────────────────────────
 function Sidebar({ active, onNav, batches, isOpen, onClose }) {
+  const T = useTheme();
+  const themeName = useThemeName();
+  const toggle = useThemeToggle();
   const pendingCount = batches.filter(b => b.status === "review").length;
   const navItems = [
     { id: "dashboard", label: "Tablero" },
@@ -599,13 +667,23 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
     { id: "batches",   label: "Lotes",    badge: pendingCount > 0 ? pendingCount : null },
     { id: "brands",    label: "Marcas" },
   ];
+  const isLight = themeName === "light";
+  const sidebarBg = isLight ? "#FFFFFF" : "#1A1A1A";
+  const divider = isLight ? `1px solid #E0E0E0` : `1px solid rgba(255,255,255,0.08)`;
+  const activeItemBg = isLight ? "rgba(32,32,32,0.06)" : "rgba(255,255,255,0.07)";
+  const footerTextColor = isLight ? "rgba(32,32,32,0.25)" : "rgba(255,255,255,0.25)";
   return (
-    <aside className={`app-sidebar${isOpen ? " sidebar-open" : ""}`} style={{ background: T.sidebar, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+    <aside className={`app-sidebar${isOpen ? " sidebar-open" : ""}`} style={{ background: sidebarBg, display: "flex", flexDirection: "column", minHeight: "100vh", borderRight: divider }}>
       <div className="gradient-line" />
       <div style={{ padding: "18px 20px 20px" }}>
-        <img src="/logo-negative.svg" alt="EDUCA EDTECH Group" style={{ width: "100%", maxWidth: 148, display: "block" }} />
+        <img
+          src={isLight ? "/logo-primary.svg" : "/logo-negative.svg"}
+          alt="EDUCA EDTECH Group"
+          style={{ width: "100%", maxWidth: 148, display: "block" }}
+          onError={e => { e.target.src = "/logo-negative.svg"; }}
+        />
       </div>
-      <div style={{ padding: "0 20px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ padding: "0 20px 16px", borderBottom: divider }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: T.teal, letterSpacing: "0.12em", textTransform: "uppercase" }}>AdBatch</div>
         <div style={{ fontSize: 10, color: T.sidebarText, marginTop: 2 }}>Generador de creatividades</div>
       </div>
@@ -613,7 +691,8 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
         {navItems.map(item => {
           const isActive = active === item.id;
           return (
-            <button key={item.id} onClick={() => { onNav(item.id); onClose?.(); }} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", background: isActive ? "rgba(255,255,255,0.07)" : "transparent", color: isActive ? T.sidebarAct : T.sidebarText, fontSize: 13, fontWeight: isActive ? 600 : 400, letterSpacing: "0.01em", transition: "all 0.15s", borderLeft: isActive ? `2px solid ${T.teal}` : "2px solid transparent" }}>
+            <button key={item.id} onClick={() => { onNav(item.id); onClose?.(); }}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", background: isActive ? activeItemBg : "transparent", color: isActive ? T.sidebarAct : T.sidebarText, fontSize: 13, fontWeight: isActive ? 600 : 400, letterSpacing: "0.01em", transition: "all 0.15s", borderLeft: isActive ? `2px solid ${T.teal}` : "2px solid transparent" }}>
               <span>{item.label}</span>
               {item.badge && (
                 <span style={{ background: T.accent, color: T.accentDark, fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 999 }}>
@@ -624,8 +703,13 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
           );
         })}
       </nav>
-      <div style={{ padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.25)", letterSpacing: "0.1em", textTransform: "uppercase", lineHeight: 1.5, marginBottom: 10 }}>
+      <div style={{ padding: "12px 20px 16px", borderTop: divider }}>
+        <button onClick={toggle}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, color: T.sidebarText, marginBottom: 12 }}>
+          {isLight ? <IcoMoon s={13} /> : <IcoSun s={13} />}
+          {isLight ? "Tema oscuro" : "Tema claro"}
+        </button>
+        <div style={{ fontSize: 9, fontWeight: 700, color: footerTextColor, letterSpacing: "0.1em", textTransform: "uppercase", lineHeight: 1.5, marginBottom: 10 }}>
           Together our future is bright.
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -642,6 +726,7 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
 
 // ─── TOP BAR ────────────────────────────────────────────────────────
 function TopBar({ title, creditsLeft, onNewBatch, onMenuToggle }) {
+  const T = useTheme();
   return (
     <div style={{ background: T.card, borderBottom: `1px solid ${T.cardBorder}`, flexShrink: 0, boxShadow: "0 1px 4px rgba(32,32,32,0.06)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 20px 12px 24px", gap: 12 }}>
@@ -663,12 +748,43 @@ function TopBar({ title, creditsLeft, onNewBatch, onMenuToggle }) {
 }
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────
+const TIME_SAVED_TOOLTIP =
+  "Cada formato tiene una linea base de tiempo estimado que llevaria producir la creatividad manualmente. " +
+  "Ese tiempo se multiplica por el numero de creatividades generadas.\n\n" +
+  "Baselines actuales (editables): IG Feed 1:1 = 4 min, IG Story 9:16 = 5 min, Banner 16:9 = 6 min, Cover LinkedIn 4:1 = 5 min.";
+
 function Dashboard({ batches, onNewBatch, onNav }) {
+  const T = useTheme();
+  const [totals, setTotals] = useState({
+    batches_total: 0,
+    creatives_total: 0,
+    formats_total: 0,
+    brands_total: 0,
+    time_saved_hours: 0,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from(VIEWS.totals)
+        .select("*")
+        .single();
+      if (cancelled) return;
+      if (error) {
+        console.warn("[dashboard] Error leyendo totales de Supabase:", error.message);
+        return;
+      }
+      if (data) setTotals(data);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const stats = [
-    { v: batches.length || 142,                                         l: "Lotes creados" },
-    { v: batches.reduce((a, b) => a + (b.adsCount || 0), 0) || 3847,   l: "Creatividades generadas" },
-    { v: 12,                                                             l: "Formatos disponibles" },
-    { v: "4.2h",                                                         l: "Tiempo ahorrado (prom.)" },
+    { v: totals.batches_total,                                         l: "Lotes creados" },
+    { v: totals.creatives_total,                                       l: "Creatividades generadas" },
+    { v: totals.formats_total,                                         l: "Formatos disponibles" },
+    { v: `${totals.time_saved_hours}h`,                                l: "Tiempo ahorrado",           tip: TIME_SAVED_TOOLTIP },
   ];
   const recent = [...batches].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
   return (
@@ -678,10 +794,10 @@ function Dashboard({ batches, onNewBatch, onNav }) {
         <div style={{ maxWidth: 820 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.6)", letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10 }}>AdBatch · Generador de creatividades</div>
           <h1 style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.1, color: T.white, marginBottom: 10, fontFamily: '"Rubik","Calibri",sans-serif' }}>
-            Buenos días, Alex.
+            Buenos días.
           </h1>
           <p style={{ fontSize: 14, color: "rgba(255,255,255,0.78)" }}>
-            {batches.filter(b => b.status === "generating").length || 0} lotes procesando · 847 creatividades restantes este mes.
+            {batches.filter(b => b.status === "generating").length || 0} lotes procesando.
           </p>
         </div>
       </div>
@@ -692,7 +808,22 @@ function Dashboard({ batches, onNewBatch, onNav }) {
         {stats.map((s, i) => (
           <div key={i} style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(32,32,32,0.06)" }}>
             <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 4 }}>{s.v.toLocaleString?.() ?? s.v}</div>
-            <div style={{ fontSize: 12, color: T.textMuted }}>{s.l}</div>
+            <div style={{ fontSize: 12, color: T.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
+              {s.l}
+              {s.tip && (
+                <span
+                  title={s.tip}
+                  style={{
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    width: 14, height: 14, borderRadius: "50%",
+                    border: `1px solid ${T.cardBorder}`, color: T.textMuted,
+                    fontSize: 9, fontWeight: 700, cursor: "help", lineHeight: 1,
+                  }}
+                >
+                  i
+                </span>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -816,6 +947,7 @@ function buildStyleVariantPrompt(styleId, brand, course, keywords5) {
 }
 
 function StepIndicator({ step, total }) {
+  const T = useTheme();
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32 }}>
       {Array.from({ length: total }, (_, i) => (
@@ -830,6 +962,7 @@ function StepIndicator({ step, total }) {
 }
 
 function SelectPill({ label, selected, onClick, accent }) {
+  const T = useTheme();
   return (
     <button onClick={onClick} style={{ padding: "7px 14px", borderRadius: 999, border: `1.5px solid ${selected ? (accent ? T.accent : T.text) : T.cardBorder}`, background: selected ? (accent ? T.accent : T.text) : T.card, color: selected ? (accent ? T.accentDark : T.cream) : T.textMuted, fontSize: 12, fontWeight: selected ? 600 : 400, transition: "all 0.15s", cursor: "pointer" }}>
       {label}
@@ -838,6 +971,7 @@ function SelectPill({ label, selected, onClick, accent }) {
 }
 
 function Generate({ brands, onBatchCreated }) {
+  const T = useTheme();
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({
     brandId: brands[0]?.id || "",
@@ -1139,9 +1273,9 @@ function Generate({ brands, onBatchCreated }) {
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Listo para generar</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Revisa la configuración antes de lanzar.</p>
 
-      {!window.__OPENAI_KEY__ && (
+      {!getLiteLLMKey() && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Ejecuta <code>window.__OPENAI_KEY__ = 'sk-...'</code> en la consola antes de lanzar si quieres imágenes.
+          <strong>Aviso:</strong> sin LiteLLM key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY</code> en Coolify (o <code>window.__LITELLM_KEY__</code> en consola) antes de lanzar si quieres imágenes.
         </div>
       )}
 
@@ -1176,7 +1310,7 @@ function Generate({ brands, onBatchCreated }) {
   ];
 
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", maxWidth: 780, flex: 1 }}>
+    <div className="fade-in content-area" style={{ flex: 1 }}>
       <StepIndicator step={step} total={5} />
       {steps[step]}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36 }}>
@@ -1189,6 +1323,7 @@ function Generate({ brands, onBatchCreated }) {
 
 // ─── BATCH PROCESSOR ────────────────────────────────────────────────
 function BatchProcessor({ batch, brands, onUpdate }) {
+  const T = useTheme();
   const [items, setItems] = useState([]);
   const [phase, setPhase] = useState("researching");
   const [progress, setProgress] = useState(0);
@@ -1284,7 +1419,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     // directions are rendered for it, the user approves one, and that same
     // style (deterministic prompt, only title/keywords swapped) replicates
     // across the rest of the courses.
-    const usePilotFlow = hasKeywordsCSV && !!window.__OPENAI_KEY__ && researched.length > 0;
+    const usePilotFlow = hasKeywordsCSV && !!getLiteLLMKey() && researched.length > 0;
     let winningStyleId = null;
     let winningStyleLabel = null;
     let pilotStartIdx = 0;
@@ -1380,8 +1515,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     await waitIfPaused();
     if (isCancelledRef.current) return;
 
-    // Image generation (requires window.__OPENAI_KEY__)
-    if (window.__OPENAI_KEY__) {
+    // Image generation (requires VITE_LITELLM_API_KEY env or window.__LITELLM_KEY__)
+    if (getLiteLLMKey()) {
       setPhase("imaging");
       for (let i = pilotStartIdx; i < researched.length; i++) {
         await waitIfPaused();
@@ -1427,13 +1562,13 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   }
 
   const done = items.filter(it => ["generated","imaged","imageFailed","researchFailed","copyFailed"].includes(it.status)).length;
-  const missingOpenAIKey = !window.__OPENAI_KEY__;
+  const missingLiteLLMKey = !getLiteLLMKey();
   const total = batch.config.courses?.length || 0;
   const barColor = ctrl === "error" ? T.coral : ctrl === "cancelled" ? T.coral : ctrl === "paused" ? T.textMuted : phase === "done" ? T.teal : T.text;
   const phaseLabel = ctrl === "error" ? "Error" : ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "pilot-copy" ? "Generando copy piloto..." : phase === "pilot-imaging" ? "Generando 5 diseños piloto..." : phase === "pilot-review" ? "Esperando aprobación de diseño" : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
 
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", maxWidth: 780, flex: 1 }}>
+    <div className="fade-in content-area" style={{ flex: 1 }}>
       <div style={{ marginBottom: 8 }}>
         <span style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase" }}>Procesando</span>
       </div>
@@ -1475,9 +1610,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           <strong>Error:</strong> {pipelineError || "El lote se detuvo por un error inesperado."}
         </div>
       )}
-      {missingOpenAIKey && ctrl !== "error" && (
+      {missingLiteLLMKey && ctrl !== "error" && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Ejecuta <code>window.__OPENAI_KEY__ = 'sk-...'</code> en la consola y repite el lote.
+          <strong>Aviso:</strong> sin LiteLLM key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY</code> en Coolify y repite el lote.
         </div>
       )}
 
@@ -1576,8 +1711,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
 
 // ─── BATCHES LIST ────────────────────────────────────────────────────
 function Batches({ batches, onOpen, onNav }) {
+  const T = useTheme();
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", maxWidth: 860, flex: 1 }}>
+    <div className="fade-in" style={{ padding: "40px 40px", flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Lotes</h1>
         <button onClick={() => onNav("generate")} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 18px", borderRadius: 999, display: "flex", alignItems: "center", gap: 6 }}>+ Nuevo lote</button>
@@ -1611,6 +1747,7 @@ function Batches({ batches, onOpen, onNav }) {
 const BRAND_TABS = ["Identidad", "Tokens", "Activos", "Tipografía", "Voz y reglas", "Config. anuncios", "Refs. visuales"];
 
 function BrandField({ label, value, onChange, type = "text", hint }) {
+  const T = useTheme();
   return (
     <div style={{ marginBottom: 18 }}>
       <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 5 }}>{label}</label>
@@ -1627,6 +1764,7 @@ function BrandField({ label, value, onChange, type = "text", hint }) {
 }
 
 function TagList({ items, onRemove, onAdd, placeholder, color }) {
+  const T = useTheme();
   const [val, setVal] = useState("");
   const bg   = color === "red" ? "#fde8e8" : color === "green" ? T.statusDone.bg : T.card;
   const text = color === "red" ? T.statusFail.text : color === "green" ? T.statusDone.text : T.text;
@@ -1652,6 +1790,7 @@ function TagList({ items, onRemove, onAdd, placeholder, color }) {
 }
 
 function SwatchRow({ colors, onChange }) {
+  const T = useTheme();
   const keys = ["primary", "secondary", "accent", "background", "text_on_overlay", "cta_text"];
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
@@ -1670,6 +1809,7 @@ function SwatchRow({ colors, onChange }) {
 }
 
 function BrandsScreen({ brands, onSave }) {
+  const T = useTheme();
   const [selectedBrand, setSelectedBrand] = useState(brands[0]?.id || "");
   const [activeTab, setActiveTab] = useState("Identidad");
   const brand = brands.find(b => b.id === selectedBrand) || brands[0];
@@ -1894,11 +2034,8 @@ function BrandsScreen({ brands, onSave }) {
 
       const addRefImages = e => {
         const files = Array.from(e.target.files);
-        Promise.all(files.map(file => new Promise(resolve => {
-          const reader = new FileReader();
-          reader.onload = ev => resolve({ name: file.name, data: ev.target.result });
-          reader.readAsDataURL(file);
-        }))).then(loaded => f("refImages", [...refImgs, ...loaded].slice(0, 8)));
+        Promise.all(files.map(file => resizeImageFile(file).then(data => ({ name: file.name, data }))))
+          .then(loaded => f("refImages", [...refImgs, ...loaded].slice(0, 8)));
       };
 
       const runRefAnalysis = async () => {
@@ -1914,7 +2051,7 @@ function BrandsScreen({ brands, onSave }) {
       return (
         <div>
           <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
-            Claude analiza tus imágenes de referencia y extrae un descriptor visual de marca. Ese descriptor se inyecta en cada prompt de generación de imagen.
+            Gemini analiza tus imágenes de referencia y extrae un descriptor visual de marca. Ese descriptor se inyecta en cada prompt de generación de imagen.
           </div>
 
           {/* Upload */}
@@ -1937,7 +2074,7 @@ function BrandsScreen({ brands, onSave }) {
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
             <button onClick={runRefAnalysis} disabled={analyzing || !refImgs.length}
               style={{ background: refImgs.length ? T.text : T.cardBorder, color: T.cream, fontSize: 12, fontWeight: 600, padding: "8px 18px", borderRadius: 999, opacity: analyzing ? 0.7 : 1 }}>
-              {analyzing ? "Analizando…" : "✦ Analizar referencias con Claude"}
+              {analyzing ? "Analizando…" : "✦ Analizar referencias con Gemini"}
             </button>
             {analyzeErr && <span style={{ fontSize: 11, color: T.statusFail.text }}>{analyzeErr}</span>}
           </div>
@@ -1959,7 +2096,7 @@ function BrandsScreen({ brands, onSave }) {
   };
 
   return (
-    <div className="fade-in" style={{ padding: "40px 32px", flex: 1, maxWidth: 960 }}>
+    <div className="fade-in content-area" style={{ flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Estudio de marca</h1>
         <button onClick={save} style={{ background: T.accent, color: T.accentDark, fontSize: 12, fontWeight: 700, padding: "8px 20px", borderRadius: 999 }}>✦ Publicar cambios</button>
@@ -2114,6 +2251,7 @@ async function exportBatchZip(batch, approvedKeys = null) {
 // ─── AD PREVIEW GRID ─────────────────────────────────────────────────
 // ─── IMAGE APPROVAL GRID ─────────────────────────────────────────────
 function ImageApprovalGrid({ items, approved, onToggle }) {
+  const T = useTheme();
   // Flatten: one card per (item × format)
   const cards = [];
   (items || []).forEach((item, itemIdx) => {
@@ -2181,6 +2319,7 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
 
 // ─── BATCH DETAIL ────────────────────────────────────────────────────
 function BatchDetail({ batch, onBack }) {
+  const T = useTheme();
   // Build all card keys from composited images
   const allKeys = [];
   (batch.items || []).forEach((item, idx) => {
@@ -2300,6 +2439,17 @@ export default function App() {
   const [activeBatch, setActiveBatch] = useState(null);
   const [processingBatch, setProcessingBatch] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [themeName, setThemeName] = useState(() => {
+    try { return localStorage.getItem("adbatch-theme") || "light"; } catch { return "light"; }
+  });
+  function toggleTheme() {
+    setThemeName(prev => {
+      const next = prev === "light" ? "dark" : "light";
+      try { localStorage.setItem("adbatch-theme", next); } catch {}
+      return next;
+    });
+  }
+  const tokens = themeName === "dark" ? DARK : LIGHT;
 
   function onBatchCreated(batch) {
     setBatches(prev => [batch, ...prev]);
@@ -2322,9 +2472,9 @@ export default function App() {
   const titleMap = { dashboard: "resumen", generate: "nuevo lote", batches: "todos los lotes", brands: "estudio de marca", processing: "procesando", "batch-detail": "detalle del lote" };
 
   return (
-    <>
+    <ThemeContext.Provider value={{ tokens, themeName, toggle: toggleTheme }}>
       <style>{globalCSS}</style>
-      <div className="app-shell">
+      <div className="app-shell" style={{ background: tokens.cream, color: tokens.text }}>
         <div className={`app-overlay${sidebarOpen ? " sidebar-open" : ""}`} onClick={() => setSidebarOpen(false)} />
         <Sidebar active={screen} onNav={setScreen} batches={batches} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <div className="app-content">
@@ -2339,6 +2489,6 @@ export default function App() {
           </main>
         </div>
       </div>
-    </>
+    </ThemeContext.Provider>
   );
 }
