@@ -11,12 +11,15 @@ Estructura de datos y storage para AdBatch en Supabase self-hosted.
 3. Copia el contenido de `migrations/0001_initial_schema.sql`.
 4. Pega y click en **Run**.
 5. Verifica en **Table Editor** que aparezcan las 5 tablas y las 3 vistas.
+6. Repite los pasos 3-4 con `migrations/0002_persist_brands_and_batches.sql` (agrega columnas que faltaban en `brands`/`batches`/`creatives`, alinea `formats` con los slugs reales de la app, y crea los buckets `creatives` + `brand-assets`).
 
 ### Opcion B: psql (si te gusta la terminal)
 
 ```bash
 psql "postgresql://postgres:PASSWORD@HOST:5432/postgres" \
   -f supabase/migrations/0001_initial_schema.sql
+psql "postgresql://postgres:PASSWORD@HOST:5432/postgres" \
+  -f supabase/migrations/0002_persist_brands_and_batches.sql
 ```
 
 ## Que crea la migration
@@ -40,21 +43,22 @@ psql "postgresql://postgres:PASSWORD@HOST:5432/postgres" \
 - 3 marcas: Structuralia, EducaHub.ai, Phia.
 - 4 formatos: IG Feed 1:1, IG Story 9:16, Banner 16:9, Cover LinkedIn 4:1.
 
-## Storage bucket
+## Storage buckets
 
-Despues de correr la migration, crea el bucket para las imagenes:
+`0002_persist_brands_and_batches.sql` ya crea los buckets `creatives` y `brand-assets` (ambos privados) via SQL (`insert into storage.buckets`). Si por lo que sea no aparecen en **Storage** despues de correr la migration, crealos a mano ahi mismo con el mismo nombre y `Public: No`.
 
-1. En Studio → **Storage** → **New bucket**.
-2. Nombre: `creatives`.
-3. Public: **No** (privado, se accede con URLs firmadas).
-4. Click **Save**.
-
-Estructura de rutas dentro del bucket:
+Estructura de rutas:
 
 ```
 creatives/
   {batch_id}/
     {creative_id}.png
+
+brand-assets/
+  {brand_slug}/
+    logo-white.png | logo-dark.png | logo-primary.png
+    font-display.ttf | font-body.ttf
+    ref-{n}.png
 ```
 
 ## Retencion de imagenes (30 dias)
@@ -86,8 +90,10 @@ alter table public.creatives
 
 ## RLS (Row Level Security)
 
-Desactivada por defecto en esta migration. Se activara cuando anadamos auth de usuario. Hasta entonces la app usa la `service_role key` para todas las operaciones (solo desde el servidor, nunca desde cliente).
+Desactivada por defecto en esta migration. Se activara cuando anadamos auth de usuario.
+
+**Nota:** `ad-creator-image` es una SPA sin backend propio (Coolify solo sirve el build estatico via nginx), asi que a diferencia de lo planeado originalmente aca arriba (`service_role key` solo desde servidor), la app usa la **anon key** desde el cliente para leer y escribir estas tablas — igual que ya hacia para leer los stats del dashboard. Con RLS desactivada, cualquiera que llegue al bundle publicado tiene en teoria lectura/escritura completa via esa key. Aceptable mientras la herramienta sea de uso interno; revisar cuando se agregue Supabase Auth.
 
 ## Proxima migration
 
-`0002_auth_and_rls.sql` (pendiente): activara RLS y anadira policies por rol cuando integremos Supabase Auth.
+`0003_auth_and_rls.sql` (pendiente): activara RLS y anadira policies por rol cuando integremos Supabase Auth.

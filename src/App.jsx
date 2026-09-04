@@ -1,5 +1,12 @@
 
 import { useState, useEffect, useRef, createContext, useContext } from "react";
+import {
+  BUCKETS,
+  fetchBrands, saveBrand,
+  fetchRecentBatches, createBatch, updateBatch,
+  fetchCreatives, insertCreative,
+  uploadFile, getSignedUrl,
+} from "./lib/supabase";
 
 // ─── DESIGN TOKENS — EDUCA EDTECH Group ───────────────────────────────
 const LIGHT = {
@@ -690,8 +697,8 @@ async function parseFile(file) {
 // ─── STATUS CHIP ────────────────────────────────────────────────────
 function Chip({ status }) {
   const T = useTheme();
-  const map = { done: T.statusDone, running: T.statusRun, failed: T.statusFail, pending: T.statusPend, generating: T.statusRun, review: { bg: "#F8E8EE", text: "#963058" }, exported: T.statusDone };
-  const labels = { done:"Listo", running:"Ejecutando", failed:"Fallido", pending:"Pendiente", generating:"Generando", review:"Revisión", exported:"Exportado" };
+  const map = { done: T.statusDone, running: T.statusRun, failed: T.statusFail, pending: T.statusPend, generating: T.statusRun, review: { bg: "#F8E8EE", text: "#963058" }, exported: T.statusDone, error: T.statusFail, cancelled: T.statusPend };
+  const labels = { done:"Listo", running:"Ejecutando", failed:"Fallido", pending:"Pendiente", generating:"Generando", review:"Revisión", exported:"Exportado", error:"Error", cancelled:"Cancelado" };
   const c = map[status?.toLowerCase()] || T.statusPend;
   return (
     <span style={{ background: c.bg, color: c.text, fontSize: 11, fontWeight: 500, padding: "3px 10px", borderRadius: 999, letterSpacing: "0.01em" }}>
@@ -919,11 +926,11 @@ const FORMATS = [
 const EUROINNOVA_IMAGE_RULES = `No incluir texto ni logotipos en la imagen. Paleta: granate #B0263E, negro #202020, blanco. Sin degradados, sin formas orgánicas, bloques de color planos, bordes geométricos nítidos. Modelos de 20-40 años, ropa neutra, poses desenfadadas. Dejar la esquina superior izquierda (15% alto, 25% ancho) completamente limpia y de color plano, sin objetos — se reservará para superponer el logo.`;
 
 const DEFAULT_BRANDS = [
-  { id: "b1", name: "Structuralia", tone: "Authoritative and precise", personality: "Technical, trustworthy", language: "es", headlineRules: "Start with action verb, max 8 words", bodyRules: "2-3 sentences, lead with transformation", forbiddenWords: "revolutionary, amazing, world-class" },
-  { id: "b2", name: "EducaHub.ai",  tone: "Warm and aspirational",     personality: "Innovative, approachable", language: "es", headlineRules: "Focus on outcome, conversational, max 10 words", bodyRules: "Lead with benefit, mention flexibility", forbiddenWords: "guaranteed, best, incredible" },
-  { id: "b3", name: "Phia",         tone: "Bold and visionary",         personality: "Cutting-edge, empowering", language: "en", headlineRules: "Future-focused, action-oriented, punchy", bodyRules: "Short and direct, emphasize AI advantage", forbiddenWords: "traditional, basic, generic" },
+  { id: "b1", slug: "structuralia", name: "Structuralia", tone: "Authoritative and precise", personality: "Technical, trustworthy", language: "es", headlineRules: "Start with action verb, max 8 words", bodyRules: "2-3 sentences, lead with transformation", forbiddenWords: "revolutionary, amazing, world-class" },
+  { id: "b2", slug: "educahub-ai", name: "EducaHub.ai",  tone: "Warm and aspirational",     personality: "Innovative, approachable", language: "es", headlineRules: "Focus on outcome, conversational, max 10 words", bodyRules: "Lead with benefit, mention flexibility", forbiddenWords: "guaranteed, best, incredible" },
+  { id: "b3", slug: "phia", name: "Phia",         tone: "Bold and visionary",         personality: "Cutting-edge, empowering", language: "en", headlineRules: "Future-focused, action-oriented, punchy", bodyRules: "Short and direct, emphasize AI advantage", forbiddenWords: "traditional, basic, generic" },
   {
-    id: "b4", name: "Euroinnova",
+    id: "b4", slug: "euroinnova", name: "Euroinnova",
     tone: "Cercano, directo, amable, enérgico",
     personality: "Cercano, directo, enérgico, práctico",
     language: "es",
@@ -936,6 +943,149 @@ const DEFAULT_BRANDS = [
     adRules: { formats: ["feed_4x5", "story"], ctas: ["Solicitar información"], logoPlacement: "top-left", mustInclude: ["course_title"], neverInclude: ["degradados", "formas orgánicas"] },
   },
 ];
+
+// ─── SUPABASE BRAND MAPPING ─────────────────────────────────────────────
+// Bridges the client brand shape (used throughout the wizard/compositor)
+// and the `brands` table row shape. Logo/font/ref-image assets are stored
+// in Storage as paths; on load we resolve each to a signed URL and put it
+// back in the same `.data` field the compositor/UI already reads — so
+// compositeAd, loadFontFace, and the Refs. visuales preview need no changes.
+function slugify(s) {
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "brand";
+}
+
+const BRAND_ASSET_URL_TTL = 60 * 60 * 24; // 1 day — used all session long, unlike per-view creative URLs
+
+async function resolveBrandAssetUrl(path) {
+  if (!path) return null;
+  try { return await getSignedUrl(BUCKETS.brandAssets, path, BRAND_ASSET_URL_TTL); }
+  catch (err) { console.warn("[supabase] No se pudo firmar URL de asset:", path, err.message); return null; }
+}
+
+async function rowToBrand(row) {
+  const logos = row.logos || {};
+  const fontData = row.font_data || {};
+  const refImages = row.ref_images || [];
+  const [logoWhiteUrl, logoDarkUrl, logoPrimaryUrl, displayFontUrl, bodyFontUrl, refUrls] = await Promise.all([
+    resolveBrandAssetUrl(logos.white),
+    resolveBrandAssetUrl(logos.dark),
+    resolveBrandAssetUrl(logos.primary),
+    resolveBrandAssetUrl(fontData.displayPath),
+    resolveBrandAssetUrl(fontData.bodyPath),
+    Promise.all(refImages.map(r => resolveBrandAssetUrl(r.path))),
+  ]);
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    tagline: row.tagline || "",
+    website: row.website || "",
+    positioning: row.positioning || "",
+    audience: row.audience || "",
+    personality: row.personality || "",
+    language: row.language || "es",
+    tone: row.tone || "",
+    headlineRules: row.headline_rules || "",
+    bodyRules: row.body_rules || "",
+    forbiddenWords: row.forbidden_words || "",
+    colors: row.colors || {},
+    fonts: row.fonts || {},
+    brandImageStyle: row.brand_image_style || "",
+    fontServerUrl: row.font_server_url || "",
+    adRules: row.ad_rules || {},
+    voiceRules: row.voice_rules || {},
+    logoWhite:   logos.white   ? { name: "logo-white",   path: logos.white,   data: logoWhiteUrl }   : undefined,
+    logoDark:    logos.dark    ? { name: "logo-dark",    path: logos.dark,    data: logoDarkUrl }    : undefined,
+    logoPrimary: logos.primary ? { name: "logo-primary", path: logos.primary, data: logoPrimaryUrl } : undefined,
+    fontData: {
+      displayFile: fontData.displayFile || "",
+      bodyFile: fontData.bodyFile || "",
+      displayPath: fontData.displayPath || "",
+      bodyPath: fontData.bodyPath || "",
+      displayData: displayFontUrl || "",
+      bodyData: bodyFontUrl || "",
+    },
+    refImages: refImages.map((r, i) => ({ name: r.name || `ref-${i + 1}`, path: r.path, data: refUrls[i] })),
+  };
+}
+
+function brandToRow(brand) {
+  const slug = brand.slug || slugify(brand.name);
+  return {
+    slug,
+    name: brand.name || slug,
+    tagline: brand.tagline || null,
+    website: brand.website || null,
+    positioning: brand.positioning || null,
+    audience: brand.audience || null,
+    personality: brand.personality || null,
+    language: brand.language || "es",
+    tone: brand.tone || null,
+    headline_rules: brand.headlineRules || null,
+    body_rules: brand.bodyRules || null,
+    forbidden_words: brand.forbiddenWords || null,
+    colors: brand.colors || {},
+    fonts: brand.fonts || {},
+    brand_image_style: brand.brandImageStyle || null,
+    font_server_url: brand.fontServerUrl || null,
+    ad_rules: brand.adRules || {},
+    voice_rules: brand.voiceRules || {},
+    logos: {
+      white: brand.logoWhite?.path || null,
+      dark: brand.logoDark?.path || null,
+      primary: brand.logoPrimary?.path || null,
+    },
+    font_data: {
+      displayFile: brand.fontData?.displayFile || null,
+      bodyFile: brand.fontData?.bodyFile || null,
+      displayPath: brand.fontData?.displayPath || null,
+      bodyPath: brand.fontData?.bodyPath || null,
+    },
+    ref_images: (brand.refImages || []).map(r => ({ name: r.name, path: r.path })),
+  };
+}
+
+// Uploads any freshly-picked (base64 `data:` URI) brand assets to Storage,
+// returning a brand object with `.path` set on each. Assets that already
+// have a `.path` (loaded from DB, untouched this session) are left alone.
+async function persistBrandAssets(brand) {
+  const slug = brand.slug || slugify(brand.name);
+  const next = { ...brand };
+
+  async function uploadIfFresh(asset, filename) {
+    if (!asset?.data || asset.path) return asset;
+    const path = `${slug}/${filename}`;
+    await uploadFile(BUCKETS.brandAssets, path, asset.data);
+    return { ...asset, path };
+  }
+
+  next.logoWhite   = await uploadIfFresh(brand.logoWhite,   "logo-white.png");
+  next.logoDark    = await uploadIfFresh(brand.logoDark,    "logo-dark.png");
+  next.logoPrimary = await uploadIfFresh(brand.logoPrimary, "logo-primary.png");
+
+  if (brand.fontData?.displayData?.startsWith("data:") && !brand.fontData?.displayPath) {
+    const path = `${slug}/font-display.ttf`;
+    await uploadFile(BUCKETS.brandAssets, path, brand.fontData.displayData, "font/ttf");
+    next.fontData = { ...next.fontData, displayPath: path };
+  }
+  if (brand.fontData?.bodyData?.startsWith("data:") && !brand.fontData?.bodyPath) {
+    const path = `${slug}/font-body.ttf`;
+    await uploadFile(BUCKETS.brandAssets, path, brand.fontData.bodyData, "font/ttf");
+    next.fontData = { ...next.fontData, bodyPath: path };
+  }
+
+  if (brand.refImages?.length) {
+    next.refImages = await Promise.all(brand.refImages.map(async (r, i) => {
+      if (r.path || !r.data) return r;
+      const path = `${slug}/ref-${i + 1}.png`;
+      await uploadFile(BUCKETS.brandAssets, path, r.data);
+      return { ...r, path };
+    }));
+  }
+
+  return next;
+}
 
 // ─── PILOT STYLE DIRECTIONS (pilot → replicate) ────────────────────────
 // Used only if the AI brainstorm below fails/is unparseable — a safe,
@@ -1383,6 +1533,58 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const isPausedRef   = useRef(false);
   const isCancelledRef = useRef(false);
   const pilotResolverRef = useRef(null);
+  const dbBatchIdRef = useRef(null);
+  const errorMessageRef = useRef(null);
+
+  // Best-effort Supabase persistence — must never break the core generation
+  // pipeline. Every call here is self-contained: catches its own errors,
+  // logs, and simply no-ops (dbBatchIdRef stays null) if Supabase is
+  // unreachable, exactly like the app already behaves without persistence.
+  async function persistBatchStart() {
+    try {
+      const row = await createBatch({
+        name: batch.name || null,
+        status: "processing",
+        brand_id: brand?.id || null,
+        config: batch.config || {},
+        courses: batch.config.courses || [],
+        started_at: new Date().toISOString(),
+      });
+      dbBatchIdRef.current = row.id;
+    } catch (err) {
+      console.warn("[supabase] No se pudo crear el lote en la base:", err.message);
+    }
+  }
+
+  async function persistBatchEnd(status, extra = {}) {
+    if (!dbBatchIdRef.current) return;
+    try {
+      await updateBatch(dbBatchIdRef.current, { status, completed_at: new Date().toISOString(), ...extra });
+    } catch (err) {
+      console.warn("[supabase] No se pudo actualizar el lote en la base:", err.message);
+    }
+  }
+
+  async function persistCreative(courseIndex, item, copy, imagePrompt, fmtKey, fmtMeta, dataUrl) {
+    if (!dbBatchIdRef.current || !dataUrl) return;
+    try {
+      const path = `${dbBatchIdRef.current}/${courseIndex}-${fmtKey}-${crypto.randomUUID()}.png`;
+      await uploadFile(BUCKETS.creatives, path, dataUrl);
+      await insertCreative({
+        batch_id: dbBatchIdRef.current,
+        image_path: path,
+        width: fmtMeta?.w || null,
+        height: fmtMeta?.h || null,
+        format_label: fmtKey,
+        params_json: {
+          courseIndex, name: item.name, siglas: item.siglas, nivel: item.nivel, url: item.url,
+          keywords5: item.keywords5, copy, imagePrompt,
+        },
+      });
+    } catch (err) {
+      console.warn("[supabase] No se pudo guardar la creatividad:", err.message);
+    }
+  }
 
   async function waitIfPaused() {
     while (isPausedRef.current && !isCancelledRef.current) {
@@ -1400,6 +1602,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     isPausedRef.current   = false;
     isCancelledRef.current = false;
     pilotResolverRef.current = null;
+    dbBatchIdRef.current = null;
+    errorMessageRef.current = null;
     setItems([]);
     setPilotDirections([]);
     setPilotCandidates([]);
@@ -1420,10 +1624,27 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   useEffect(() => {
     // Safety net: any error not already caught inline (network failure, unexpected
     // exception, etc.) must still surface — never fail silently / hang the UI.
-    runPipeline().catch(err => {
-      setCtrl("error");
-      setPipelineError(err?.message || String(err));
-    });
+    runPipeline()
+      .then(() => {
+        // runPipeline() resolves normally from EVERY early "return" (cancellation
+        // checks, explicit pilot-failure branches) as well as full completion —
+        // this is the one place that reliably runs after any of them, so it's
+        // where cancelled/explicit-error batches get persisted (the success path
+        // already persists itself at the bottom of runPipeline).
+        if (isCancelledRef.current) {
+          onUpdate(batch.id, { status: "cancelled" });
+          persistBatchEnd("cancelled");
+        } else if (errorMessageRef.current) {
+          onUpdate(batch.id, { status: "error", errorMessage: errorMessageRef.current });
+          persistBatchEnd("failed", { error_message: errorMessageRef.current });
+        }
+      })
+      .catch(err => {
+        setCtrl("error");
+        setPipelineError(err?.message || String(err));
+        onUpdate(batch.id, { status: "error", errorMessage: err?.message || String(err) });
+        persistBatchEnd("failed", { error_message: err?.message || String(err) });
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runKey]);
 
@@ -1441,6 +1662,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       ...(customDim ? [{ key: customDim, ...customDimToSize(customDim) }] : []),
     ];
     const primaryApiSize = formatList[0]?.api || "1024x1024";
+
+    await persistBatchStart();
 
     setPhase("researching");
     for (let i = 0; i < total; i++) {
@@ -1474,7 +1697,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     if (usePilotFlow && researched[0].status === "researchFailed") {
       // Can't build a pilot design without research on course 0 — surface it and stop.
       setCtrl("error");
-      setPipelineError(`No se pudo investigar el curso piloto: ${researched[0].researchError}`);
+      errorMessageRef.current = `No se pudo investigar el curso piloto: ${researched[0].researchError}`;
+      setPipelineError(errorMessageRef.current);
       return;
     }
 
@@ -1488,7 +1712,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         researched[0] = { ...pilotCourse, status: "copyFailed", copyError: err?.message || "Error al generar copy piloto" };
         setItems(prev => prev.map((it, idx) => idx === 0 ? researched[0] : it));
         setCtrl("error");
-        setPipelineError(`No se pudo generar el copy del curso piloto: ${err?.message || err}`);
+        errorMessageRef.current = `No se pudo generar el copy del curso piloto: ${err?.message || err}`;
+        setPipelineError(errorMessageRef.current);
         return;
       }
       if (isCancelledRef.current) return;
@@ -1530,12 +1755,17 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       winningDirection = directions.find(d => d.id === chosenId) || null;
 
       const winner = candidates.find(c => c.styleId === chosenId);
+      const pilotImagePrompt = winningDirection ? buildStyleVariantPrompt(winningDirection, brand, pilotCourse, pilotCourse.keywords5) : "";
       researched[0] = {
         ...researched[0], status: "imaged",
-        imagePrompt: winningDirection ? buildStyleVariantPrompt(winningDirection, brand, pilotCourse, pilotCourse.keywords5) : "",
+        imagePrompt: pilotImagePrompt,
         composited: winner?.composited || {},
       };
       setItems(prev => prev.map((it, idx) => idx === 0 ? researched[0] : it));
+      for (const [fmtKey, dataUrl] of Object.entries(winner?.composited || {})) {
+        const fmtMeta = formatList.find(f => f.key === fmtKey);
+        persistCreative(0, researched[0], pilotCopy, pilotImagePrompt, fmtKey, fmtMeta, dataUrl);
+      }
       pilotStartIdx = 1;
       setProgress(45);
     }
@@ -1594,6 +1824,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           for (const fmt of formatList) {
             composited[fmt.key] = await compositeAd(imageB64, firstCopy, brand, fmt.w, fmt.h);
             setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging", composited: { ...composited } } : it));
+            persistCreative(i, item, firstCopy, imagePrompt, fmt.key, fmt, composited[fmt.key]);
           }
           researched[i] = { ...item, status: "imaged", imagePrompt, composited };
         } catch (err) {
@@ -1608,12 +1839,14 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     setPhase("done");
     setProgress(100);
     const allFormats = [...(batch.config.formats || []), ...(batch.config.customDim ? [batch.config.customDim] : [])];
+    const finalAdsCount = researched.length * allFormats.length * variantCount;
     onUpdate(batch.id, {
       status: "review",
-      adsCount: researched.length * allFormats.length * variantCount,
+      adsCount: finalAdsCount,
       items: researched,
       config: { ...batch.config, winningStyleId: winningDirection?.id || null, winningStyleLabel: winningDirection?.label || null },
     });
+    persistBatchEnd("done", { ads_count: finalAdsCount });
   }
 
   const done = items.filter(it => ["generated","imaged","imageFailed","researchFailed","copyFailed"].includes(it.status)).length;
@@ -2378,9 +2611,58 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
 // ─── BATCH DETAIL ────────────────────────────────────────────────────
 function BatchDetail({ batch, onBack }) {
   const T = useTheme();
+
+  // Batches opened straight from the wizard already have `items` in memory.
+  // Batches loaded from the Supabase list (a previous session / another
+  // user) start with empty `items` and a `dbId` — hydrate them lazily from
+  // `creatives` rows, resolving each image to a signed URL.
+  const [hydratedItems, setHydratedItems] = useState([]);
+  useEffect(() => {
+    if (batch.items?.length || !batch.dbId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await fetchCreatives(batch.dbId);
+        if (!rows.length || cancelled) return;
+        const byCourseIndex = {};
+        for (const row of rows) {
+          const idx = row.params_json?.courseIndex ?? 0;
+          if (!byCourseIndex[idx]) {
+            byCourseIndex[idx] = {
+              name: row.params_json?.name || "Curso",
+              siglas: row.params_json?.siglas || "",
+              nivel: row.params_json?.nivel || "",
+              url: row.params_json?.url || "",
+              keywords5: row.params_json?.keywords5 || [],
+              status: "imaged",
+              copies: [row.params_json?.copy || {}],
+              composited: {},
+            };
+          }
+          if (row.image_path) {
+            try {
+              byCourseIndex[idx].composited[row.format_label || row.id] = await getSignedUrl(BUCKETS.creatives, row.image_path);
+            } catch (err) {
+              console.warn("[supabase] No se pudo firmar creatividad:", row.image_path, err.message);
+            }
+          }
+        }
+        if (!cancelled) {
+          const ordered = Object.keys(byCourseIndex).map(Number).sort((a, b) => a - b).map(k => byCourseIndex[k]);
+          setHydratedItems(ordered);
+        }
+      } catch (err) {
+        console.warn("[supabase] No se pudieron cargar creatividades del lote:", err.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [batch.dbId, batch.items]);
+
+  const effectiveItems = batch.items?.length ? batch.items : hydratedItems;
+
   // Build all card keys from composited images
   const allKeys = [];
-  (batch.items || []).forEach((item, idx) => {
+  (effectiveItems || []).forEach((item, idx) => {
     if (!item.composited) return;
     Object.keys(item.composited).forEach(fmtKey => {
       allKeys.push(`${idx}-${fmtKey}`);
@@ -2389,7 +2671,7 @@ function BatchDetail({ batch, onBack }) {
 
   const [approved, setApproved] = useState(() => new Set(allKeys));
 
-  // Sync when batch.items changes (e.g. after live processing)
+  // Sync when items change (e.g. after live processing, or hydration lands)
   useEffect(() => {
     setApproved(prev => {
       const next = new Set(prev);
@@ -2397,7 +2679,7 @@ function BatchDetail({ batch, onBack }) {
       return next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batch.items]);
+  }, [effectiveItems]);
 
   function toggleKey(key) {
     setApproved(prev => {
@@ -2421,11 +2703,11 @@ function BatchDetail({ batch, onBack }) {
           <p style={{ fontSize: 13, color: T.textMuted }}>{batch.brand} · {batch.adsCount || 0} anuncios · <Chip status={batch.status} /></p>
         </div>
         <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-          <button onClick={() => exportBatchZip(batch, null)} style={{ background: T.cream, color: T.text, fontSize: 12, fontWeight: 500, padding: "8px 16px", borderRadius: 999, border: `1px solid ${T.cardBorder}` }}>
+          <button onClick={() => exportBatchZip({ ...batch, items: effectiveItems }, null)} style={{ background: T.cream, color: T.text, fontSize: 12, fontWeight: 500, padding: "8px 16px", borderRadius: 999, border: `1px solid ${T.cardBorder}` }}>
             ZIP completo
           </button>
           {hasImages && (
-            <button onClick={() => exportBatchZip(batch, approved)} style={{ background: T.text, color: T.white, fontSize: 12, fontWeight: 600, padding: "8px 18px", borderRadius: 999 }}>
+            <button onClick={() => exportBatchZip({ ...batch, items: effectiveItems }, approved)} style={{ background: T.text, color: T.white, fontSize: 12, fontWeight: 600, padding: "8px 18px", borderRadius: 999 }}>
               Exportar aprobadas ({approvedCount})
             </button>
           )}
@@ -2466,7 +2748,7 @@ function BatchDetail({ batch, onBack }) {
             </div>
           </div>
           <p style={{ fontSize: 11, color: T.textMuted, marginBottom: 16 }}>Clic en imagen para aprobar / rechazar. Solo las aprobadas se incluyen en el export.</p>
-          <ImageApprovalGrid items={batch.items} approved={approved} onToggle={toggleKey} />
+          <ImageApprovalGrid items={effectiveItems} approved={approved} onToggle={toggleKey} />
         </div>
       )}
 
@@ -2474,7 +2756,7 @@ function BatchDetail({ batch, onBack }) {
       {!hasImages && (
         <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "12px 20px", borderBottom: `1px solid ${T.cardBorder}`, fontSize: 12, fontWeight: 600 }}>Cursos ({batch.config?.courses?.length || 0})</div>
-          {(batch.items || batch.config?.courses || []).slice(0, 20).map((c, i, arr) => (
+          {(effectiveItems.length ? effectiveItems : (batch.config?.courses || [])).slice(0, 20).map((c, i, arr) => (
             <div key={i} style={{ display: "flex", alignItems: "center", padding: "10px 20px", borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none", gap: 12 }}>
               <span style={{ fontSize: 11, color: T.textMuted, width: 24 }}>{i + 1}</span>
               {c.siglas && <span style={{ fontSize: 11, fontWeight: 700, color: T.tealText, background: "#EAF7F6", border: `1px solid ${T.teal}`, borderRadius: 6, padding: "1px 7px", flexShrink: 0 }}>{c.siglas}</span>}
@@ -2509,6 +2791,60 @@ export default function App() {
   }
   const tokens = themeName === "dark" ? DARK : LIGHT;
 
+  // Load brands from Supabase on mount, merged with the hardcoded defaults:
+  // a DB row wins for any slug that has one; a default not yet in the DB
+  // stays visible locally AND gets seeded in the background (so Euroinnova,
+  // added after the 0001 seed, shows up for everyone once persisted). Any
+  // brand that exists only in the DB (created via the UI previously) is
+  // appended too. Never blocks the app — falls back to defaults on failure.
+  useEffect(() => {
+    (async () => {
+      let rows;
+      try { rows = await fetchBrands(); }
+      catch (err) { console.warn("[supabase] No se pudieron cargar marcas, usando defaults:", err.message); return; }
+      if (!rows.length) return;
+
+      const bySlug = new Map(rows.map(r => [r.slug, r]));
+      const merged = await Promise.all(DEFAULT_BRANDS.map(async def => {
+        const row = bySlug.get(def.slug);
+        if (row) { bySlug.delete(def.slug); return rowToBrand(row); }
+        saveBrand(brandToRow(def)).catch(err => console.warn("[supabase] No se pudo sembrar marca:", def.slug, err.message));
+        return def;
+      }));
+      const extra = await Promise.all([...bySlug.values()].map(rowToBrand));
+      setBrands([...merged, ...extra]);
+    })();
+  }, []);
+
+  // Recent batches list, so "Lotes"/Dashboard survive a reload. Only
+  // metadata — creatives (images) for a given batch load lazily when opened
+  // (BatchDetail), not all up front.
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await fetchRecentBatches(50);
+        setBatches(prev => {
+          const localIds = new Set(prev.map(b => b.id));
+          const fromDb = rows.filter(r => !localIds.has(r.id)).map(r => ({
+            id: r.id,
+            dbId: r.id,
+            name: r.name || "Lote",
+            brandId: r.brand_id,
+            brand: DEFAULT_BRANDS.find(b => b.id === r.brand_id || b.slug === r.brand_id)?.name || "Marca",
+            status: r.status === "done" ? "review" : r.status === "processing" || r.status === "pending" ? "generating" : r.status,
+            createdAt: r.created_at,
+            adsCount: r.ads_count || 0,
+            config: r.config || {},
+            items: [],
+          }));
+          return [...prev, ...fromDb];
+        });
+      } catch (err) {
+        console.warn("[supabase] No se pudieron cargar lotes recientes:", err.message);
+      }
+    })();
+  }, []);
+
   function onBatchCreated(batch) {
     setBatches(prev => [batch, ...prev]);
     setProcessingBatch(batch);
@@ -2523,6 +2859,15 @@ export default function App() {
   }
   function onSaveBrand(updated) {
     setBrands(prev => prev.map(b => b.id === updated.id ? updated : b));
+    (async () => {
+      try {
+        const withAssets = await persistBrandAssets(updated);
+        const saved = await saveBrand(brandToRow(withAssets));
+        setBrands(prev => prev.map(b => b.id === updated.id ? { ...withAssets, id: saved.id, slug: saved.slug } : b));
+      } catch (err) {
+        console.warn("[supabase] No se pudo guardar la marca:", err.message);
+      }
+    })();
   }
   function openBatch(b) { setActiveBatch(b); setScreen("batch-detail"); }
 
