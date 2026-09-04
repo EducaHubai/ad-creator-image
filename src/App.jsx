@@ -240,6 +240,10 @@ async function callOpenAIResponsesPDF(systemPrompt, pdfBase64Array, userText, ma
 
 async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
   const system = `You are a brand intelligence analyst. Extract brand configuration from brand documents. Return ONLY valid JSON — no markdown, no explanation.
+
+CRITICAL LANGUAGE RULE: every extracted text value (name, tagline, positioning, audience, personality, tone, voiceRules, adRules, extracted_notes) MUST stay in the exact original language of the source document(s). Do NOT translate anything to English or any other language, even though this schema's field descriptions below are written in English purely to describe structure. Detect the document's real language and put it in "language" — then write every other value in that same language.
+
+Schema (English text below = structural hints only, not example output language):
 {
   "name": "brand display name",
   "tagline": "official tagline",
@@ -260,7 +264,7 @@ async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
   const raw = await callOpenAIResponsesPDF(
     system,
     pdfBase64Array,
-    `Extract brand config.${existingBrandName ? ` Brand: "${existingBrandName}".` : ""} Return only JSON.`,
+    `Extract brand config.${existingBrandName ? ` Brand: "${existingBrandName}".` : ""} Keep every text value in the document's original language — do not translate. Return only JSON.`,
     2000
   );
   try { return JSON.parse(raw.replace(/```json|```/g, "").trim()); }
