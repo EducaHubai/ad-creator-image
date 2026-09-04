@@ -206,6 +206,38 @@ async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000, m
   return data.choices?.[0]?.message?.content || "";
 }
 
+// Chat Completions' image_url content only accepts actual image MIME types —
+// PDFs need OpenAI's separate Responses API (input_file content part).
+async function callOpenAIResponsesPDF(systemPrompt, pdfBase64Array, userText, maxTokens = 2000, model = "gpt-4o") {
+  const key = getOpenAIKey();
+  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  const fileBlocks = pdfBase64Array.map((b64, i) => ({
+    type: "input_file",
+    filename: `brand_doc_${i + 1}.pdf`,
+    file_data: `data:application/pdf;base64,${b64}`,
+  }));
+  const res = await fetch(`${OPENAI_BASE}/v1/responses`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      max_output_tokens: maxTokens,
+      input: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: [...fileBlocks, { type: "input_text", text: userText }] },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
+  }
+  const data = await res.json();
+  if (data.output_text) return data.output_text;
+  const textPart = data.output?.flatMap(o => o.content || []).find(c => c.type === "output_text");
+  return textPart?.text || "";
+}
+
 async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
   const system = `You are a brand intelligence analyst. Extract brand configuration from brand documents. Return ONLY valid JSON — no markdown, no explanation.
 {
@@ -225,14 +257,10 @@ async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
   "extracted_notes": "important nuances"
 }`;
 
-  const fileBlocks = pdfBase64Array.map((b64) => ({
-    type: "image_url",
-    image_url: { url: `data:application/pdf;base64,${b64}` },
-  }));
-
-  const raw = await callOpenAIVision(
+  const raw = await callOpenAIResponsesPDF(
     system,
-    [...fileBlocks, { type: "text", text: `Extract brand config.${existingBrandName ? ` Brand: "${existingBrandName}".` : ""} Return only JSON.` }],
+    pdfBase64Array,
+    `Extract brand config.${existingBrandName ? ` Brand: "${existingBrandName}".` : ""} Return only JSON.`,
     2000
   );
   try { return JSON.parse(raw.replace(/```json|```/g, "").trim()); }
