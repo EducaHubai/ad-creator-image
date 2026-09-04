@@ -903,43 +903,59 @@ const DEFAULT_BRANDS = [
   },
 ];
 
-// ─── EUROINNOVA STYLE DIRECTIONS (pilot → replicate) ──────────────────
-// 5 fixed visual directions per the brand pipeline spec. Prompts are built
-// deterministically (no LLM call) so the winning style replicates identically
-// across every course — only titulo_curso / keywords_curso change.
-const STYLE_VARIANTS = [
-  {
-    id: "producto",
-    label: "Producto",
-    describe: (courseTitle, kw) => `Dirección "Producto": el granate #B0263E cubre aproximadamente el 65% del encuadre, panel blanco inferior vacío, foto profesional evocando: ${kw}. Curso: "${courseTitle}".`,
-  },
-  {
-    id: "split_diagonal",
-    label: "Split diagonal",
-    describe: (courseTitle, kw) => `Dirección "Split diagonal": mosaico geométrico diagonal con fotos recortadas representando cada uno de estos temas: ${kw}. Curso: "${courseTitle}".`,
-  },
-  {
-    id: "minimalista",
-    label: "Minimalista",
-    describe: (courseTitle, kw) => `Dirección "Minimalista": fondo negro #202020 sólido, bloque granate #B0263E inferior, foto en blanco y negro de alto contraste relacionada con: ${kw}. Curso: "${courseTitle}".`,
-  },
-  {
-    id: "editorial_duotono",
-    label: "Editorial dúotono",
-    describe: (courseTitle, kw) => `Dirección "Editorial dúotono": foto tratada enteramente en dúotono granate #B0263E / blanco, relacionada con: ${kw}. Curso: "${courseTitle}".`,
-  },
-  {
-    id: "grid_iconos",
-    label: "Grid de iconos",
-    describe: (courseTitle, kw) => `Dirección "Grid de iconos": chips redondeados con iconos representando cada uno de estos temas: ${kw}, sobre fondo granate #B0263E. Curso: "${courseTitle}".`,
-  },
+// ─── PILOT STYLE DIRECTIONS (pilot → replicate) ────────────────────────
+// Used only if the AI brainstorm below fails/is unparseable — a safe,
+// generic fallback set, not brand-specific.
+const FALLBACK_STYLE_VARIANTS = [
+  { label: "Producto",          description: "Un color de marca fuerte cubre ~65% del encuadre, panel liso vacío en el resto, foto profesional evocando los temas del curso." },
+  { label: "Split diagonal",    description: "Mosaico geométrico diagonal con fotos recortadas representando cada tema del curso." },
+  { label: "Minimalista",       description: "Fondo sólido oscuro, bloque de color de marca inferior, foto en blanco y negro de alto contraste." },
+  { label: "Editorial dúotono", description: "Foto tratada enteramente en dúotono con los colores de marca." },
+  { label: "Grid de iconos",    description: "Chips redondeados con iconos representando cada tema del curso, sobre fondo de color de marca." },
 ];
 
-function buildStyleVariantPrompt(styleId, brand, course, keywords5) {
-  const style = STYLE_VARIANTS.find(s => s.id === styleId);
+function buildGenericImageRules(brand) {
+  const colors = brand.colors || {};
+  const palette = [colors.primary, colors.secondary, colors.accent].filter(Boolean).join(", ") || "colores neutros de marca";
+  return `No incluir texto ni logotipos en la imagen. Paleta: ${palette}. Sin degradados ni formas orgánicas — composición limpia y geométrica. Dejar una esquina completamente limpia y de color plano para superponer el logo.`;
+}
+
+// Brainstorms 5 DISTINCT visual style directions for the pilot course, bound
+// to the selected brand's own colors/tone/image rules — regenerated every
+// batch instead of a fixed list, so the pilot always offers fresh options
+// within the brandbook.
+async function generateStyleDirections(brand, course, keywords5) {
+  const colors = brand.colors || {};
+  const palette = [colors.primary, colors.secondary, colors.accent, colors.background].filter(Boolean).join(", ");
   const kw = (keywords5 || []).join(", ") || "formación online";
-  const commonRules = brand.brandImageStyle || EUROINNOVA_IMAGE_RULES;
-  return `${style.describe(course.name, kw)}\n\n${commonRules}`;
+  const system = `Eres un director de arte publicitario. Genera 5 direcciones de diseño de fondo DISTINTAS entre sí para un anuncio, respetando estrictamente las reglas de marca dadas. Devuelve SOLO JSON válido, sin explicación ni markdown: un array de exactamente 5 objetos {"label":"nombre corto, 2-4 palabras","description":"1-2 frases: composición, tratamiento fotográfico, uso de color/bloques"}.`;
+  const user = `## MARCA
+Nombre: ${brand.name}
+Tono/personalidad: ${[brand.tone, brand.personality].filter(Boolean).join(" · ") || "neutro"}
+Paleta: ${palette || "sin paleta definida — usar colores neutros"}
+Reglas visuales de marca: ${brand.brandImageStyle || "sin degradados, composición limpia y geométrica"}
+
+## CURSO PILOTO
+Título: ${course.name}
+Keywords: ${kw}
+
+## INSTRUCCIONES
+Cada una de las 5 direcciones debe ser claramente distinta de las otras (varía composición, tratamiento fotográfico, uso de bloques de color, iconografía, etc.) pero todas deben respetar la paleta y las reglas visuales de marca de arriba. No describir texto ni logotipos — se añaden aparte por separado. Reservar siempre una esquina limpia y de color plano para el logo.`;
+
+  const raw = await callOpenAI(system, user, 700);
+  try {
+    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    if (Array.isArray(parsed) && parsed.length >= 3) {
+      return parsed.slice(0, 5).map((d, i) => ({ id: `style_${i + 1}`, label: d.label || `Estilo ${i + 1}`, description: d.description || "" }));
+    }
+  } catch { /* fall through to static fallback below */ }
+  return FALLBACK_STYLE_VARIANTS.map((s, i) => ({ id: `style_${i + 1}`, label: s.label, description: s.description }));
+}
+
+function buildStyleVariantPrompt(direction, brand, course, keywords5) {
+  const kw = (keywords5 || []).join(", ") || "formación online";
+  const commonRules = brand.brandImageStyle || buildGenericImageRules(brand);
+  return `Dirección "${direction.label}": ${direction.description}\n\nCurso: "${course.name}". Temas: ${kw}.\n\n${commonRules}`;
 }
 
 function StepIndicator({ step, total }) {
@@ -1325,6 +1341,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const [progress, setProgress] = useState(0);
   const [ctrl, setCtrl] = useState("running"); // "running"|"paused"|"cancelled"|"done"|"error"
   const [runKey, setRunKey] = useState(0);
+  const [pilotDirections, setPilotDirections] = useState([]);
   const [pilotCandidates, setPilotCandidates] = useState([]);
   const [pilotSelected, setPilotSelected] = useState(null);
   const [pipelineError, setPipelineError] = useState("");
@@ -1350,6 +1367,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     isCancelledRef.current = false;
     pilotResolverRef.current = null;
     setItems([]);
+    setPilotDirections([]);
     setPilotCandidates([]);
     setPilotSelected(null);
     setPipelineError("");
@@ -1411,13 +1429,12 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     if (isCancelledRef.current) return;
 
     // Pilot flow: only when the CSV carries per-course keywords AND image
-    // generation is available. Course 0 becomes the pilot — 5 fixed style
-    // directions are rendered for it, the user approves one, and that same
-    // style (deterministic prompt, only title/keywords swapped) replicates
-    // across the rest of the courses.
+    // generation is available. Course 0 becomes the pilot — 5 AI-brainstormed
+    // style directions (bound to the brand's own colors/tone/image rules) are
+    // rendered for it, the user approves one, and that same direction (only
+    // title/keywords swapped) replicates across the rest of the courses.
     const usePilotFlow = hasKeywordsCSV && hasApiKey() && researched.length > 0;
-    let winningStyleId = null;
-    let winningStyleLabel = null;
+    let winningDirection = null;
     let pilotStartIdx = 0;
 
     if (usePilotFlow && researched[0].status === "researchFailed") {
@@ -1444,36 +1461,44 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       researched[0] = { ...pilotCourse, status: "generated", copies: [pilotCopy] };
       setItems(prev => prev.map((it, idx) => idx === 0 ? researched[0] : it));
 
+      setPhase("pilot-brainstorm");
+      let directions;
+      try {
+        directions = await generateStyleDirections(brand, pilotCourse, pilotCourse.keywords5);
+      } catch {
+        directions = FALLBACK_STYLE_VARIANTS.map((s, i) => ({ id: `style_${i + 1}`, label: s.label, description: s.description }));
+      }
+      setPilotDirections(directions);
+
       setPhase("pilot-imaging");
       const candidates = [];
-      for (const style of STYLE_VARIANTS) {
+      for (const direction of directions) {
         await waitIfPaused();
         if (isCancelledRef.current) return;
         try {
-          const prompt = buildStyleVariantPrompt(style.id, brand, pilotCourse, pilotCourse.keywords5);
+          const prompt = buildStyleVariantPrompt(direction, brand, pilotCourse, pilotCourse.keywords5);
           const imageB64 = await generateImage(prompt, primaryApiSize);
           if (isCancelledRef.current) return;
           const composited = {};
           for (const fmt of formatList) composited[fmt.key] = await compositeAd(imageB64, pilotCopy, brand, fmt.w, fmt.h);
-          candidates.push({ styleId: style.id, label: style.label, composited });
+          candidates.push({ styleId: direction.id, label: direction.label, composited });
         } catch (err) {
-          candidates.push({ styleId: style.id, label: style.label, error: err.message });
+          candidates.push({ styleId: direction.id, label: direction.label, error: err.message });
         }
         setPilotCandidates([...candidates]);
-        setProgress(25 + Math.round((candidates.length / STYLE_VARIANTS.length) * 20));
+        setProgress(25 + Math.round((candidates.length / directions.length) * 20));
       }
       if (isCancelledRef.current) return;
 
       setPhase("pilot-review");
       const chosenId = await new Promise(resolve => { pilotResolverRef.current = resolve; });
       if (isCancelledRef.current || !chosenId) return;
-      winningStyleId = chosenId;
-      winningStyleLabel = STYLE_VARIANTS.find(s => s.id === chosenId)?.label || null;
+      winningDirection = directions.find(d => d.id === chosenId) || null;
 
       const winner = candidates.find(c => c.styleId === chosenId);
       researched[0] = {
         ...researched[0], status: "imaged",
-        imagePrompt: buildStyleVariantPrompt(chosenId, brand, pilotCourse, pilotCourse.keywords5),
+        imagePrompt: winningDirection ? buildStyleVariantPrompt(winningDirection, brand, pilotCourse, pilotCourse.keywords5) : "",
         composited: winner?.composited || {},
       };
       setItems(prev => prev.map((it, idx) => idx === 0 ? researched[0] : it));
@@ -1525,8 +1550,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         const firstCopy = Array.isArray(item.copies) ? item.copies[0] : {};
         setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging" } : it));
         try {
-          const imagePrompt = winningStyleId
-            ? buildStyleVariantPrompt(winningStyleId, brand, item, item.keywords5)
+          const imagePrompt = winningDirection
+            ? buildStyleVariantPrompt(winningDirection, brand, item, item.keywords5)
             : await generateImagePrompt(brand, item, item.research || {}, firstCopy);
           if (isCancelledRef.current) return;
           const imageB64 = await generateImage(imagePrompt, primaryApiSize);
@@ -1553,7 +1578,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       status: "review",
       adsCount: researched.length * allFormats.length * variantCount,
       items: researched,
-      config: { ...batch.config, winningStyleId, winningStyleLabel },
+      config: { ...batch.config, winningStyleId: winningDirection?.id || null, winningStyleLabel: winningDirection?.label || null },
     });
   }
 
@@ -1561,7 +1586,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const missingApiKey = !hasApiKey();
   const total = batch.config.courses?.length || 0;
   const barColor = ctrl === "error" ? T.coral : ctrl === "cancelled" ? T.coral : ctrl === "paused" ? T.textMuted : phase === "done" ? T.teal : T.text;
-  const phaseLabel = ctrl === "error" ? "Error" : ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "pilot-copy" ? "Generando copy piloto..." : phase === "pilot-imaging" ? "Generando 5 diseños piloto..." : phase === "pilot-review" ? "Esperando aprobación de diseño" : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
+  const phaseLabel = ctrl === "error" ? "Error" : ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "pilot-copy" ? "Generando copy piloto..." : phase === "pilot-brainstorm" ? "Diseñando 5 direcciones de estilo..." : phase === "pilot-imaging" ? "Generando 5 diseños piloto..." : phase === "pilot-review" ? "Esperando aprobación de diseño" : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
 
   return (
     <div className="fade-in content-area" style={{ flex: 1 }}>
@@ -1620,29 +1645,32 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         <span style={{ fontSize: 11, color: T.textMuted }}>{done}/{total} listos</span>
       </div>
 
-      {(phase === "pilot-imaging" || phase === "pilot-review") && (
+      {(phase === "pilot-brainstorm" || phase === "pilot-imaging" || phase === "pilot-review") && (
         <div style={{ marginBottom: 28 }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>Elige el diseño ganador</div>
             <div style={{ fontSize: 12, color: T.textMuted }}>
-              {phase === "pilot-imaging"
-                ? `Generando 5 direcciones de diseño para "${items[0]?.name || "el curso piloto"}"…`
+              {phase === "pilot-brainstorm"
+                ? `Diseñando 5 direcciones de estilo distintas para "${items[0]?.name || "el curso piloto"}", dentro de las reglas de marca…`
+                : phase === "pilot-imaging"
+                ? `Generando las 5 imágenes para "${items[0]?.name || "el curso piloto"}"…`
                 : "Este diseño se replicará en el resto de cursos del CSV, cambiando solo título y keywords."}
             </div>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-            {STYLE_VARIANTS.map(style => {
-              const cand = pilotCandidates.find(c => c.styleId === style.id);
+            {pilotDirections.map(direction => {
+              const cand = pilotCandidates.find(c => c.styleId === direction.id);
               const thumb = cand?.composited ? Object.values(cand.composited)[0] : null;
-              const isSelected = pilotSelected === style.id;
+              const isSelected = pilotSelected === direction.id;
               const canSelect = phase === "pilot-review" && !!thumb;
               return (
-                <div key={style.id}
-                  onClick={() => { if (canSelect) setPilotSelected(style.id); }}
+                <div key={direction.id}
+                  onClick={() => { if (canSelect) setPilotSelected(direction.id); }}
+                  title={direction.description}
                   style={{ width: 150, cursor: canSelect ? "pointer" : "default", background: T.card, borderRadius: 12, overflow: "hidden", border: `2px solid ${isSelected ? T.teal : T.cardBorder}`, boxShadow: isSelected ? "0 0 0 3px rgba(96,191,184,0.15)" : "none", transition: "border-color 0.15s, box-shadow 0.15s" }}>
                   <div style={{ position: "relative", width: 150, height: 188, background: T.cream, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {thumb
-                      ? <img src={thumb} alt={style.label} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                      ? <img src={thumb} alt={direction.label} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       : cand?.error
                         ? <span style={{ fontSize: 10, color: T.statusFail.text, padding: 8, textAlign: "center", lineHeight: 1.4 }}>{cand.error}</span>
                         : <div className="spin" style={{ width: 18, height: 18, border: `2px solid ${T.cardBorder}`, borderTopColor: T.textMuted, borderRadius: "50%" }} />
@@ -1652,7 +1680,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
                     )}
                   </div>
                   <div style={{ padding: "8px 10px", borderTop: `1px solid ${T.cardBorder}` }}>
-                    <div style={{ fontSize: 11, fontWeight: 600 }}>{style.label}</div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{direction.label}</div>
                   </div>
                 </div>
               );
