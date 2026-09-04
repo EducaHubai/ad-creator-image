@@ -243,6 +243,8 @@ async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
 
 CRITICAL LANGUAGE RULE: every extracted text value (name, tagline, positioning, audience, personality, tone, voiceRules, adRules, extracted_notes) MUST stay in the exact original language of the source document(s). Do NOT translate anything to English or any other language, even though this schema's field descriptions below are written in English purely to describe structure. Detect the document's real language and put it in "language" — then write every other value in that same language.
 
+TYPOGRAPHY RULE: actively look for a typography/type-system page — often titled "Tipografía", "Typography", "Fuentes", or shown as a specimen spread with sample letterforms ("Aa Aa Aa") next to a font name, sometimes with separate entries for headline/display vs body/text weights. Read the font family name(s) from there even if they only appear as a visual caption next to letterform samples, not as a separate text mention elsewhere. If display and body use the same family, repeat it in both fields. Only leave a font field empty if the document truly never names one anywhere.
+
 Schema (English text below = structural hints only, not example output language):
 {
   "name": "brand display name",
@@ -254,7 +256,7 @@ Schema (English text below = structural hints only, not example output language)
   "language": "es / en / pt / fr",
   "tone": "tone of voice in 1-2 sentences",
   "colors": { "primary": "#hexcode", "secondary": "#hexcode", "accent": "#hexcode", "background": "#hexcode", "text_on_overlay": "#ffffff", "cta_text": "#ffffff" },
-  "fonts": { "display": "heading font family", "body": "body font family" },
+  "fonts": { "display": "exact headline/display font family name from the document's typography page", "body": "exact body/text font family name from the document's typography page" },
   "voiceRules": { "headline": ["rule 1"], "body": ["rule 1"], "forbidden": ["word1"] },
   "adRules": { "ctas": ["CTA 1"], "logoPlacement": "bottom-right", "mustInclude": ["course_title"], "neverInclude": ["competitor_names"] },
   "borderRadius": "8px",
