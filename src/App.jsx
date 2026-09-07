@@ -2196,6 +2196,25 @@ function SwatchRow({ colors, onChange }) {
   );
 }
 
+// Keeps uploaded brandbook PDFs around for the tab's session (sessionStorage:
+// survives a reload, gone when the tab closes) so testing the same PDF over
+// and over doesn't mean re-picking it from disk each time. Not real
+// persistence — per-browser-tab only, no sharing across users/devices.
+function pdfSessionKey(brandId) { return `adbatch-pdfs-${brandId}`; }
+function loadStoredPdfs(brandId) {
+  try { return JSON.parse(sessionStorage.getItem(pdfSessionKey(brandId)) || "[]"); }
+  catch { return []; }
+}
+function storePdfs(brandId, files) {
+  try {
+    if (files.length) sessionStorage.setItem(pdfSessionKey(brandId), JSON.stringify(files));
+    else sessionStorage.removeItem(pdfSessionKey(brandId));
+  } catch (err) {
+    // Quota exceeded (PDFs are base64'd, ~33% bigger) — fine, just won't persist this time.
+    console.warn("[session] No se pudo guardar el PDF para la sesión:", err.message);
+  }
+}
+
 function BrandsScreen({ brands, onSave }) {
   const T = useTheme();
   const [selectedBrand, setSelectedBrand] = useState(brands[0]?.id || "");
@@ -2204,13 +2223,13 @@ function BrandsScreen({ brands, onSave }) {
   const [form, setForm] = useState(brand || {});
   const pdfRef = useRef();
 
-  const [pdfFiles, setPdfFiles] = useState([]);
+  const [pdfFiles, setPdfFiles] = useState(() => loadStoredPdfs(brand?.id));
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeProgress, setAnalyzeProgress] = useState("");
   const [analyzeError, setAnalyzeError] = useState("");
   const [analyzeSuccess, setAnalyzeSuccess] = useState(false);
 
-  useEffect(() => { setForm(brand || {}); setPdfFiles([]); setAnalyzeSuccess(false); setAnalyzeError(""); }, [selectedBrand]);
+  useEffect(() => { setForm(brand || {}); setPdfFiles(loadStoredPdfs(selectedBrand)); setAnalyzeSuccess(false); setAnalyzeError(""); }, [selectedBrand]);
 
   const f = (key, val) => setForm(p => ({ ...p, [key]: val }));
 
@@ -2224,7 +2243,11 @@ function BrandsScreen({ brands, onSave }) {
       reader.onload = ev => resolve({ name: file.name, base64: ev.target.result.split(",")[1], size: file.size });
       reader.readAsDataURL(file);
     })));
-    setPdfFiles(prev => [...prev, ...loaded]);
+    setPdfFiles(prev => {
+      const next = [...prev, ...loaded];
+      storePdfs(selectedBrand, next);
+      return next;
+    });
     setAnalyzeSuccess(false);
     setAnalyzeError("");
   }
@@ -2531,7 +2554,7 @@ function BrandsScreen({ brands, onSave }) {
                   <span style={{ fontSize: 12, fontWeight: 600 }}>{pdfFiles.length} documento{pdfFiles.length > 1 ? "s" : ""} listo{pdfFiles.length > 1 ? "s" : ""} para analizar</span>
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={() => pdfRef.current?.click()} style={{ background: "transparent", color: T.textMuted, fontSize: 11, border: `1px solid ${T.cardBorder}`, padding: "4px 10px", borderRadius: 999 }}>+ Agregar</button>
-                    <button onClick={() => { setPdfFiles([]); setAnalyzeSuccess(false); setAnalyzeError(""); }} style={{ background: "transparent", color: T.textMuted, fontSize: 11 }}>Limpiar ×</button>
+                    <button onClick={() => { setPdfFiles([]); storePdfs(selectedBrand, []); setAnalyzeSuccess(false); setAnalyzeError(""); }} style={{ background: "transparent", color: T.textMuted, fontSize: 11 }}>Limpiar ×</button>
                   </div>
                 </div>
                 {pdfFiles.map((p, i) => (
@@ -2539,7 +2562,11 @@ function BrandsScreen({ brands, onSave }) {
                     <span style={{ fontSize: 16 }}>📄</span>
                     <span style={{ fontSize: 12, flex: 1 }}>{p.name}</span>
                     <span style={{ fontSize: 10, color: T.textMuted }}>{(p.size / 1024).toFixed(0)} KB</span>
-                    <button onClick={() => setPdfFiles(prev => prev.filter((_, j) => j !== i))} style={{ background: "transparent", color: T.textMuted, fontSize: 13 }}>×</button>
+                    <button onClick={() => setPdfFiles(prev => {
+                      const next = prev.filter((_, j) => j !== i);
+                      storePdfs(selectedBrand, next);
+                      return next;
+                    })} style={{ background: "transparent", color: T.textMuted, fontSize: 13 }}>×</button>
                   </div>
                 ))}
               </div>
