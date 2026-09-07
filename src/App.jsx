@@ -298,18 +298,25 @@ async function generateAdCopy(brandConfig, campaignConfig, courseData, research)
     ...(campaignConfig.formats || []),
     ...(campaignConfig.customDim ? [`custom_${campaignConfig.customDim}`] : []),
   ];
+  // Goal/audience/painPoints/ctas are all optional in the wizard — when
+  // skipped, tell the model to infer sensible ones from the course itself
+  // rather than writing a prompt line that trails off into nothing.
+  const campaignLines = [
+    campaignConfig.ctas?.length ? `CTA must be one of: ${campaignConfig.ctas.join(" / ")}` : "CTA: not specified — infer a natural one from the course/outcome.",
+    campaignConfig.goal ? `Goal: ${campaignConfig.goal}` : "Goal: not specified — infer from the course.",
+    campaignConfig.audience?.length ? `Target audience: ${campaignConfig.audience.join(", ")}` : "Target audience: not specified — infer who this course is for.",
+    campaignConfig.painPoints?.length ? `Pain points addressed: ${campaignConfig.painPoints.join(" / ")}` : "Pain points: not specified — infer a real, relevant one from the course topic.",
+  ].join("\n");
+
   const system = `## BRAND
 Brand: ${brandConfig.name}
 Tone: ${brandConfig.tone}
 Language: ${brandConfig.language}
 Headline rules: ${brandConfig.headlineRules}
 Forbidden: ${brandConfig.forbiddenWords}
-CTA must be one of: ${campaignConfig.ctas.join(" / ")}
+${campaignLines}
 
 ## CAMPAIGN
-Goal: ${campaignConfig.goal}
-Target audience: ${campaignConfig.audience.join(", ")}
-Pain points addressed: ${campaignConfig.painPoints.join(" / ")}
 Ad formats (dimensions): ${allFormats.join(", ")}
 Variants requested: ${campaignConfig.variantCount || 1}
 
@@ -1108,7 +1115,7 @@ function buildGenericImageRules(brand) {
 // to the selected brand's own colors/tone/image rules — regenerated every
 // batch instead of a fixed list, so the pilot always offers fresh options
 // within the brandbook.
-async function generateStyleDirections(brand, course, keywords5) {
+async function generateStyleDirections(brand, course, keywords5, refImageDescriptor = "") {
   const colors = brand.colors || {};
   const palette = [colors.primary, colors.secondary, colors.accent, colors.background].filter(Boolean).join(", ");
   const kw = (keywords5 || []).join(", ") || "formación online";
@@ -1118,6 +1125,7 @@ Nombre: ${brand.name}
 Tono/personalidad: ${[brand.tone, brand.personality].filter(Boolean).join(" · ") || "neutro"}
 Paleta: ${palette || "sin paleta definida — usar colores neutros"}
 Reglas visuales de marca: ${brand.brandImageStyle || "sin degradados, composición limpia y geométrica"}
+${refImageDescriptor ? `Referencia visual aportada por el usuario para este lote — las 5 direcciones deben inspirarse en esta estética, no solo en las reglas de marca: ${refImageDescriptor}` : ""}
 
 ## CURSO PILOTO
 Título: ${course.name}
@@ -1166,7 +1174,7 @@ function SelectPill({ label, selected, onClick, accent }) {
   );
 }
 
-function Generate({ brands, onBatchCreated }) {
+function Generate({ brands, onBatchCreated, onSaveBrand }) {
   const T = useTheme();
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({
@@ -1180,6 +1188,7 @@ function Generate({ brands, onBatchCreated }) {
     courses: [],
     variantCount: 1,
     customDim: "",
+    refImages: [],
   });
   const [customAudience, setCustomAudience] = useState("");
   const [customPain, setCustomPain] = useState("");
@@ -1193,6 +1202,24 @@ function Generate({ brands, onBatchCreated }) {
     setCfg(p => ({ ...p, [key]: p[key].includes(val) ? p[key].filter(x => x !== val) : [...p[key], val] }));
   }
   function set(key, val) { setCfg(p => ({ ...p, [key]: val })); }
+
+  const logoRef = useRef();
+  function handleLogoUpload(e) {
+    const file = e.target.files[0]; if (!file || !brand) return;
+    const reader = new FileReader();
+    reader.onload = ev => onSaveBrand?.({ ...brand, logoPrimary: { name: file.name, data: ev.target.result } });
+    reader.readAsDataURL(file);
+  }
+
+  const refImgRef = useRef();
+  function handleRefImagesUpload(e) {
+    const files = Array.from(e.target.files);
+    Promise.all(files.map(file => new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = ev => resolve({ name: file.name, data: ev.target.result });
+      reader.readAsDataURL(file);
+    }))).then(loaded => set("refImages", [...cfg.refImages, ...loaded].slice(0, 6)));
+  }
 
   const fileRef = useRef();
   async function handleFile(e) {
@@ -1211,29 +1238,44 @@ function Generate({ brands, onBatchCreated }) {
     }
   }
 
+  // Objetivo, audiencia, puntos de dolor y CTAs son opcionales — solo marca,
+  // formatos y cursos son obligatorios para poder generar algo.
   const canProceed = [
-    cfg.brandId && cfg.goal,
-    cfg.audience.length > 0 && cfg.painPoints.length > 0,
-    cfg.ctas.length > 0 && (cfg.formats.length > 0 || cfg.customDim.trim().length > 0),
+    !!cfg.brandId,
+    true,
+    cfg.formats.length > 0 || cfg.customDim.trim().length > 0,
     cfg.courses.length > 0,
+    true, // referencias visuales + logo — opcional
     true,
   ][step];
 
+  const [launching, setLaunching] = useState(false);
+
   async function launchBatch() {
+    setLaunching(true);
+    // Referencias visuales del lote (si las hay) se resumen una sola vez acá,
+    // en un descriptor de texto que guía las 5 direcciones del piloto —
+    // evita repetir el análisis de imagen en cada corrida del pipeline.
+    let refImageDescriptor = "";
+    if (cfg.refImages.length && hasApiKey()) {
+      try { refImageDescriptor = await analyzeRefImages(cfg.refImages); }
+      catch (err) { console.warn("No se pudieron analizar las referencias visuales:", err.message); }
+    }
     const batch = {
       id: Date.now().toString(),
-      name: `${cfg.goal} — ${brand?.name}`,
+      name: cfg.goal ? `${cfg.goal} — ${brand?.name}` : (brand?.name || "Lote"),
       brand: brand?.name || "Brand",
       brandId: cfg.brandId,
       status: "generating",
       createdAt: new Date().toISOString(),
       adsCount: 0,
-      config: { ...cfg },
+      config: { ...cfg, refImageDescriptor },
       items: [],
     };
     onBatchCreated(batch);
+    setLaunching(false);
     setStep(0);
-    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "" });
+    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", refImages: [] });
   }
 
   const steps = [
@@ -1254,7 +1296,9 @@ function Generate({ brands, onBatchCreated }) {
       </div>
 
       <div style={{ marginBottom: 24 }}>
-        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Objetivo de campaña</label>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+          Objetivo de campaña <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional</span>
+        </label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {GOALS.map(g => <SelectPill key={g} label={g} selected={cfg.goal === g} onClick={() => set("goal", g)} />)}
         </div>
@@ -1276,12 +1320,12 @@ function Generate({ brands, onBatchCreated }) {
 
     // Paso 1: Audiencia + Puntos de dolor
     <div key={1} className="fade-in">
-      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Audiencia y puntos de dolor</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>¿A quién te diriges y qué tensión resuelve esta campaña?</p>
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Audiencia y puntos de dolor <span style={{ color: T.textLight, fontWeight: 400, fontSize: 14 }}>(opcional)</span></h2>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>¿A quién te diriges y qué tensión resuelve esta campaña? Podés saltear este paso.</p>
 
       <div style={{ marginBottom: 24 }}>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Audiencia objetivo <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>selecciona todas las que apliquen</span>
+          Audiencia objetivo <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — selecciona todas las que apliquen</span>
         </label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
           {AUDIENCES.map(a => <SelectPill key={a} label={a} selected={cfg.audience.includes(a)} onClick={() => toggle("audience", a)} />)}
@@ -1306,7 +1350,7 @@ function Generate({ brands, onBatchCreated }) {
 
       <div>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Principales puntos de dolor <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>hasta 3</span>
+          Principales puntos de dolor <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — hasta 3</span>
         </label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
           {PAINS.map(p => <SelectPill key={p} label={p} selected={cfg.painPoints.includes(p)} onClick={() => { if (cfg.painPoints.includes(p) || cfg.painPoints.length < 3) toggle("painPoints", p); }} />)}
@@ -1338,7 +1382,7 @@ function Generate({ brands, onBatchCreated }) {
       <div style={{ marginBottom: 24 }}>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
           CTAs <span style={{ background: T.accent, color: T.accentDark, borderRadius: 4, fontSize: 9, fontWeight: 700, padding: "1px 6px", textTransform: "none", marginLeft: 4 }}>inteligente</span>
-          <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none", marginLeft: 6 }}>hasta 3 — recomendadas para tu objetivo</span>
+          <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none", marginLeft: 6 }}>opcional — hasta 3, recomendadas para tu objetivo</span>
         </label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
           {suggestedCTAs.map(c => <SelectPill key={c} label={c} selected={cfg.ctas.includes(c)} onClick={() => { if (cfg.ctas.includes(c) || cfg.ctas.length < 3) toggle("ctas", c); }} accent />)}
@@ -1464,8 +1508,60 @@ function Generate({ brands, onBatchCreated }) {
       })()}
     </div>,
 
-    // Paso 4: Confirmar
+    // Paso 4: Referencias visuales + logo
     <div key={4} className="fade-in">
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Referencias visuales y logo <span style={{ color: T.textLight, fontWeight: 400, fontSize: 14 }}>(opcional)</span></h2>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Guían las 5 opciones de diseño del piloto. Podés saltear este paso.</p>
+
+      <div style={{ marginBottom: 28 }}>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+          Logo de {brand?.name || "la marca"}
+        </label>
+        {(brand?.logoWhite || brand?.logoDark || brand?.logoPrimary) ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
+            {(brand.logoWhite || brand.logoDark || brand.logoPrimary)?.data && (
+              <img src={(brand.logoWhite || brand.logoDark || brand.logoPrimary).data} alt="logo" style={{ height: 28, maxWidth: 100, objectFit: "contain", background: T.cream, borderRadius: 4, padding: 4 }} />
+            )}
+            <span style={{ fontSize: 12, color: T.tealText }}>✓ Logo cargado — se usa en las creatividades generadas.</span>
+            <span style={{ fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>Para más versiones (blanco/oscuro): Estudio de marca → Activos</span>
+          </div>
+        ) : (
+          <div>
+            <div style={{ padding: "10px 14px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 10, fontSize: 12, color: "#8A6300" }}>
+              Esta marca todavía no tiene logo — las creatividades se generan sin logo hasta que subas uno.
+            </div>
+            <input ref={logoRef} type="file" accept=".svg,.png" style={{ display: "none" }} onChange={handleLogoUpload} />
+            <button onClick={() => logoRef.current?.click()} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 18px", borderRadius: 999 }}>
+              Subir logo
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+          Referencias visuales <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — hasta 6</span>
+        </label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {cfg.refImages.map((img, i) => (
+            <div key={i} style={{ position: "relative" }}>
+              <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}` }} />
+              <button onClick={() => set("refImages", cfg.refImages.filter((_, j) => j !== i))}
+                style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+            </div>
+          ))}
+          {cfg.refImages.length < 6 && (
+            <button onClick={() => refImgRef.current?.click()}
+              style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+          )}
+        </div>
+        <input ref={refImgRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handleRefImagesUpload} />
+        <p style={{ fontSize: 11, color: T.textLight }}>Ej. moodboard, fotos de campañas anteriores, referencias de estilo. Se analizan una vez al lanzar el lote.</p>
+      </div>
+    </div>,
+
+    // Paso 5: Confirmar
+    <div key={5} className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Listo para generar</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Revisa la configuración antes de lanzar.</p>
 
@@ -1478,13 +1574,14 @@ function Generate({ brands, onBatchCreated }) {
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden", marginBottom: 20 }}>
         {[
           ["Marca", brand?.name],
-          ["Objetivo", cfg.goal],
+          ["Objetivo", cfg.goal || "—"],
           ["Audiencia", cfg.audience.join(", ") || "—"],
           ["Puntos de dolor", cfg.painPoints.join(" · ") || "—"],
           ["CTAs", cfg.ctas.join(" / ") || "—"],
           ["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...(cfg.customDim ? [`Custom ${cfg.customDim}`] : [])].join(", ")],
           ["Variantes por curso", `${cfg.variantCount}`],
           ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} anuncios`],
+          ...(cfg.refImages.length ? [["Referencias visuales", `${cfg.refImages.length} imagen(es)`]] : []),
         ].map(([k, v], i, arr) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "12px 20px", borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
             <span style={{ fontSize: 12, color: T.textMuted, fontWeight: 500 }}>{k}</span>
@@ -1498,8 +1595,8 @@ function Generate({ brands, onBatchCreated }) {
           <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} creatividades</div>
           <div style={{ fontSize: 11, color: "#888" }}>La IA investigará cada URL y generará copy + prompts de imagen</div>
         </div>
-        <button onClick={launchBatch} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap" }}>
-          ✦ Lanzar lote
+        <button onClick={launchBatch} disabled={launching} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap", opacity: launching ? 0.7 : 1, cursor: launching ? "wait" : "pointer" }}>
+          {launching ? "Analizando referencias…" : "✦ Lanzar lote"}
         </button>
       </div>
     </div>,
@@ -1507,7 +1604,7 @@ function Generate({ brands, onBatchCreated }) {
 
   return (
     <div className="fade-in content-area" style={{ flex: 1 }}>
-      <StepIndicator step={step} total={5} />
+      <StepIndicator step={step} total={6} />
       {steps[step]}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36 }}>
         <button onClick={() => setStep(s => Math.max(0, s - 1))} style={{ background: "transparent", color: step === 0 ? T.textLight : T.textMuted, fontSize: 13, padding: "8px 0", opacity: step === 0 ? 0.3 : 1 }} disabled={step === 0}>← Atrás</button>
@@ -1723,7 +1820,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       setPhase("pilot-brainstorm");
       let directions;
       try {
-        directions = await generateStyleDirections(brand, pilotCourse, pilotCourse.keywords5);
+        directions = await generateStyleDirections(brand, pilotCourse, pilotCourse.keywords5, batch.config.refImageDescriptor);
       } catch {
         directions = FALLBACK_STYLE_VARIANTS.map((s, i) => ({ id: `style_${i + 1}`, label: s.label, description: s.description }));
       }
@@ -2884,7 +2981,7 @@ export default function App() {
           <TopBar title={titleMap[screen] || screen} creditsLeft={creditsLeft} onNewBatch={() => setScreen("generate")} onMenuToggle={() => setSidebarOpen(o => !o)} />
           <main style={{ flex: 1, overflowY: "auto", display: "flex" }}>
             {screen === "dashboard"    && <Dashboard batches={batches} onNewBatch={() => setScreen("generate")} onNav={setScreen} />}
-            {screen === "generate"     && <Generate brands={brands} onBatchCreated={onBatchCreated} />}
+            {screen === "generate"     && <Generate brands={brands} onBatchCreated={onBatchCreated} onSaveBrand={onSaveBrand} />}
             {screen === "processing"   && processingBatch && <BatchProcessor batch={processingBatch} brands={brands} onUpdate={onBatchUpdate} />}
             {screen === "batches"      && <Batches batches={batches} onOpen={openBatch} onNav={setScreen} />}
             {screen === "brands"       && <BrandsScreen brands={brands} onSave={onSaveBrand} />}
