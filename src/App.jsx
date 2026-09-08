@@ -786,7 +786,7 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
       <div className="gradient-line" />
       <div style={{ padding: "18px 20px 20px" }}>
         <img
-          src={isLight ? "/logo-primary.svg" : "/logo-negative.svg"}
+          src={isLight ? "/logo.svg" : "/logo-negative.svg"}
           alt="EDUCA EDTECH Group"
           style={{ width: "100%", maxWidth: 148, display: "block" }}
           onError={e => { e.target.src = "/logo-negative.svg"; }}
@@ -1435,7 +1435,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   const stepBrand = (
     <div key="brand" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Configuración de campaña</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Elige tu marca y define el objetivo de campaña.</p>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>{path === "replicate" ? "Elige tu marca." : "Elige tu marca y define el objetivo de campaña."}</p>
 
       <div style={{ marginBottom: 24 }}>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Marca</label>
@@ -1448,14 +1448,16 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         </div>
       </div>
 
-      <div style={{ marginBottom: 24 }}>
-        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Objetivo de campaña <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional</span>
-        </label>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {GOALS.map(g => <SelectPill key={g} label={g} selected={cfg.goal === g} onClick={() => set("goal", g)} />)}
+      {path !== "replicate" && (
+        <div style={{ marginBottom: 24 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+            Objetivo de campaña <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional</span>
+          </label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {GOALS.map(g => <SelectPill key={g} label={g} selected={cfg.goal === g} onClick={() => set("goal", g)} />)}
+          </div>
         </div>
-      </div>
+      )}
 
       <div>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
