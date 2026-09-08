@@ -1608,7 +1608,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
       {steps[step]}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36 }}>
         <button onClick={() => setStep(s => Math.max(0, s - 1))} style={{ background: "transparent", color: step === 0 ? T.textLight : T.textMuted, fontSize: 13, padding: "8px 0", opacity: step === 0 ? 0.3 : 1 }} disabled={step === 0}>← Atrás</button>
-        {step < 4 && <button onClick={() => setStep(s => s + 1)} disabled={!canProceed} style={{ background: canProceed ? T.text : T.cardBorder, color: canProceed ? T.cream : T.textMuted, fontSize: 13, fontWeight: 600, padding: "9px 24px", borderRadius: 999, transition: "all 0.15s", cursor: canProceed ? "pointer" : "not-allowed" }}>Continuar →</button>}
+        {step < steps.length - 1 && <button onClick={() => setStep(s => s + 1)} disabled={!canProceed} style={{ background: canProceed ? T.text : T.cardBorder, color: canProceed ? T.cream : T.textMuted, fontSize: 13, fontWeight: 600, padding: "9px 24px", borderRadius: 999, transition: "all 0.15s", cursor: canProceed ? "pointer" : "not-allowed" }}>Continuar →</button>}
       </div>
     </div>
   );
