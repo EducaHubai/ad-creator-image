@@ -161,15 +161,16 @@ const globalCSS = `
 `;
 
 // ─── API HELPERS ────────────────────────────────────────────────────
-// Direct OpenAI only — OPENAI_API_KEY (build var) or window.__OPENAI_KEY__ (console).
-function getOpenAIKey() { return window.__OPENAI_KEY__ || import.meta.env.OPENAI_API_KEY || import.meta.env.VITE_OPENAI_API_KEY || ""; }
+// Direct OpenAI only — VITE_LITELLM_API_KEY_GPT (build var, despite the name
+// this is a plain OpenAI key, not a LiteLLM one) or window.__OPENAI_KEY__ (console).
+function getOpenAIKey() { return window.__OPENAI_KEY__ || import.meta.env.VITE_LITELLM_API_KEY_GPT || import.meta.env.OPENAI_API_KEY || import.meta.env.VITE_OPENAI_API_KEY || ""; }
 function hasApiKey()    { return !!getOpenAIKey(); }
 
 const OPENAI_BASE = "https://api.openai.com";
 
 async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "gpt-4o") {
   const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
   const res = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -192,7 +193,7 @@ async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "
 
 async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000, model = "gpt-4o") {
   const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
   const res = await fetch(`${OPENAI_BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
@@ -217,7 +218,7 @@ async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000, m
 // PDFs need OpenAI's separate Responses API (input_file content part).
 async function callOpenAIResponsesPDF(systemPrompt, pdfBase64Array, userText, maxTokens = 2000, model = "gpt-4o") {
   const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
   const fileBlocks = pdfBase64Array.map((b64, i) => ({
     type: "input_file",
     filename: `brand_doc_${i + 1}.pdf`,
@@ -464,7 +465,7 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
 
 async function generateImage(prompt, apiSize) {
   const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura OPENAI_API_KEY en Coolify (o window.__OPENAI_KEY__ en consola).");
+  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
   // No response_format: some accounts (gpt-image-1) reject the param entirely and
   // always return b64_json; others (dall-e-3) default to a url. Handle both.
   const res = await fetch(`${OPENAI_BASE}/v1/images/generations`, {
@@ -1743,7 +1744,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
 
       {!hasApiKey() && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>OPENAI_API_KEY</code> en Coolify (o <code>window.__OPENAI_KEY__</code> en consola) antes de lanzar si quieres imágenes.
+          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY_GPT</code> en Coolify (o <code>window.__OPENAI_KEY__</code> en consola) antes de lanzar si quieres imágenes.
         </div>
       )}
 
@@ -2293,7 +2294,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       )}
       {missingApiKey && ctrl !== "error" && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>OPENAI_API_KEY</code> en Coolify y repite el lote.
+          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY_GPT</code> en Coolify y repite el lote.
         </div>
       )}
 
