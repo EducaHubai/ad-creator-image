@@ -1382,17 +1382,12 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   const [showCostConfirm, setShowCostConfirm] = useState(false);
 
   // Objetivo, audiencia, puntos de dolor y CTAs son opcionales — solo marca,
-  // formatos y cursos son obligatorios para poder generar algo. En el camino
-  // "replicate" los formatos se eligen recién en el paso 4 (junto a la
-  // creatividad de referencia), así que el paso 2 no los exige.
-  const canProceed = [
-    !!cfg.brandId,
-    true,
-    path === "replicate" ? true : hasFormats,
-    cfg.courses.length > 0,
-    path === "replicate" ? (!!cfg.replicateImage && hasFormats) : true, // scratch: opcional. replicate: imagen + formato obligatorios
-    true,
-  ][step];
+  // formatos y cursos son obligatorios para poder generar algo. Mismo orden
+  // que el array `steps` armado más abajo — debe tener la misma longitud.
+  const canProceedList = path === "replicate"
+    ? [!!cfg.brandId, !!cfg.replicateImage && hasFormats, cfg.courses.length > 0, true]
+    : [!!cfg.brandId, true, hasFormats, cfg.courses.length > 0, true, true];
+  const canProceed = canProceedList[step];
 
   const [launching, setLaunching] = useState(false);
 
@@ -1436,9 +1431,9 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", refImages: [], replicateImage: null });
   }
 
-  const steps = [
-    // Paso 0: Marca + Objetivo + Variantes
-    <div key={0} className="fade-in">
+  // Paso: Marca + Objetivo + Variantes — shared by both paths.
+  const stepBrand = (
+    <div key="brand" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Configuración de campaña</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Elige tu marca y define el objetivo de campaña.</p>
 
@@ -1474,10 +1469,12 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
           ))}
         </div>
       </div>
-    </div>,
+    </div>
+  );
 
-    // Paso 1: Audiencia + Puntos de dolor
-    <div key={1} className="fade-in">
+  // Paso: Audiencia + Puntos de dolor — scratch path only (replicate infers these).
+  const stepAudience = (
+    <div key="audience" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Audiencia y puntos de dolor <span style={{ color: T.textLight, fontWeight: 400, fontSize: 14 }}>(opcional)</span></h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>¿A quién te diriges y qué tensión resuelve esta campaña? Podés saltear este paso.</p>
 
@@ -1530,10 +1527,13 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
             style={{ padding: "7px 14px", background: T.text, color: T.cream, borderRadius: 8, fontSize: 12, fontWeight: 500 }}>Añadir</button>
         </div>
       </div>
-    </div>,
+    </div>
+  );
 
-    // Paso 2: CTAs + Formatos
-    <div key={2} className="fade-in">
+  // Paso: CTAs + Formatos — scratch path only (replicate picks formats
+  // alongside the reference creative instead, no CTAs step at all).
+  const stepCtasFormats = (
+    <div key="ctas-formats" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>CTAs y formatos</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Elige llamadas a la acción y formatos de salida para este lote.</p>
 
@@ -1566,16 +1566,16 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         </div>
       </div>
 
-      {path !== "replicate" && (
-        <div>
-          <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Formatos de anuncio</label>
-          {renderFormatsPicker()}
-        </div>
-      )}
-    </div>,
+      <div>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Formatos de anuncio</label>
+        {renderFormatsPicker()}
+      </div>
+    </div>
+  );
 
-    // Paso 3: Cargar cursos
-    <div key={3} className="fade-in">
+  // Paso: Cargar cursos — shared by both paths.
+  const stepCourses = (
+    <div key="courses" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Cargar cursos</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>
         Mínimo <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>course_name</code> / <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>url</code>.
@@ -1634,104 +1634,108 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         </div>
         );
       })()}
-    </div>,
+    </div>
+  );
 
-    // Paso 4: fork — scratch: referencias + logo (opcional). replicate: creatividad a replicar + formatos (obligatorio) + logo.
-    <div key={4} className="fade-in">
-      {path === "replicate" ? (
-        <>
-          <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Creatividad a replicar</h2>
-          <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Subí un anuncio ya existente — se analiza y ese mismo diseño se replica en todos los cursos, cambiando solo título, keywords e imagen.</p>
-        </>
+  // Shared logo block — used both in the replicate path's creative step and
+  // the scratch path's refs+logo step.
+  const logoBlock = (
+    <div style={{ marginBottom: 28 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+        Logo de {brand?.name || "la marca"}
+      </label>
+      {(brand?.logoWhite || brand?.logoDark || brand?.logoPrimary) ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
+          {(brand.logoWhite || brand.logoDark || brand.logoPrimary)?.data && (
+            <img src={(brand.logoWhite || brand.logoDark || brand.logoPrimary).data} alt="logo" style={{ height: 28, maxWidth: 100, objectFit: "contain", background: T.cream, borderRadius: 4, padding: 4 }} />
+          )}
+          <span style={{ fontSize: 12, color: T.tealText }}>✓ Logo cargado — se usa en las creatividades generadas.</span>
+          <span style={{ fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>Para más versiones (blanco/oscuro): Estudio de marca → Activos</span>
+        </div>
       ) : (
-        <>
-          <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Referencias visuales y logo <span style={{ color: T.textLight, fontWeight: 400, fontSize: 14 }}>(opcional)</span></h2>
-          <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Guían las 5 opciones de diseño del piloto. Podés saltear este paso.</p>
-        </>
-      )}
-
-      {path === "replicate" && (
-        <>
-          <div style={{ marginBottom: 28 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-              Imagen de referencia <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>obligatorio</span>
-            </label>
-            {cfg.replicateImage ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
-                <img src={cfg.replicateImage.data} alt={cfg.replicateImage.name} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
-                <span style={{ fontSize: 12, color: T.textMuted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cfg.replicateImage.name}</span>
-                <button onClick={() => set("replicateImage", null)} style={{ fontSize: 11, color: T.textMuted, background: "transparent" }}>Cambiar ×</button>
-              </div>
-            ) : (
-              <div onClick={() => replicateImgRef.current?.click()}
-                style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 12, padding: "28px 20px", textAlign: "center", cursor: "pointer", background: T.card }}>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Subir creatividad de referencia</div>
-                <div style={{ fontSize: 12, color: T.textMuted }}>PNG o JPG — un anuncio ya hecho, de esta marca o de otra</div>
-              </div>
-            )}
-            <input ref={replicateImgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleReplicateImageUpload} />
+        <div>
+          <div style={{ padding: "10px 14px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 10, fontSize: 12, color: "#8A6300" }}>
+            Esta marca todavía no tiene logo — las creatividades se generan sin logo hasta que subas uno.
           </div>
-
-          <div style={{ marginBottom: 28 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-              Formatos de salida <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>tantos como necesites, con sus medidas</span>
-            </label>
-            {renderFormatsPicker()}
-          </div>
-        </>
+          <input ref={logoRef} type="file" accept=".svg,.png" style={{ display: "none" }} onChange={handleLogoUpload} />
+          <button onClick={() => logoRef.current?.click()} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 18px", borderRadius: 999 }}>
+            Subir logo
+          </button>
+        </div>
       )}
+    </div>
+  );
+
+  // Paso (replicate only): creatividad de referencia + formatos + logo.
+  const stepReplicateCreative = (
+    <div key="replicate-creative" className="fade-in">
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Creatividad a replicar</h2>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Subí un anuncio ya existente — se analiza y ese mismo diseño se replica en todos los cursos, cambiando solo título, keywords e imagen.</p>
 
       <div style={{ marginBottom: 28 }}>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Logo de {brand?.name || "la marca"}
+          Imagen de referencia <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>obligatorio</span>
         </label>
-        {(brand?.logoWhite || brand?.logoDark || brand?.logoPrimary) ? (
+        {cfg.replicateImage ? (
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
-            {(brand.logoWhite || brand.logoDark || brand.logoPrimary)?.data && (
-              <img src={(brand.logoWhite || brand.logoDark || brand.logoPrimary).data} alt="logo" style={{ height: 28, maxWidth: 100, objectFit: "contain", background: T.cream, borderRadius: 4, padding: 4 }} />
-            )}
-            <span style={{ fontSize: 12, color: T.tealText }}>✓ Logo cargado — se usa en las creatividades generadas.</span>
-            <span style={{ fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>Para más versiones (blanco/oscuro): Estudio de marca → Activos</span>
+            <img src={cfg.replicateImage.data} alt={cfg.replicateImage.name} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
+            <span style={{ fontSize: 12, color: T.textMuted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cfg.replicateImage.name}</span>
+            <button onClick={() => set("replicateImage", null)} style={{ fontSize: 11, color: T.textMuted, background: "transparent" }}>Cambiar ×</button>
           </div>
         ) : (
-          <div>
-            <div style={{ padding: "10px 14px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 10, fontSize: 12, color: "#8A6300" }}>
-              Esta marca todavía no tiene logo — las creatividades se generan sin logo hasta que subas uno.
-            </div>
-            <input ref={logoRef} type="file" accept=".svg,.png" style={{ display: "none" }} onChange={handleLogoUpload} />
-            <button onClick={() => logoRef.current?.click()} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 18px", borderRadius: 999 }}>
-              Subir logo
-            </button>
+          <div onClick={() => replicateImgRef.current?.click()}
+            style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 12, padding: "28px 20px", textAlign: "center", cursor: "pointer", background: T.card }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Subir creatividad de referencia</div>
+            <div style={{ fontSize: 12, color: T.textMuted }}>PNG o JPG — un anuncio ya hecho, de esta marca o de otra</div>
           </div>
         )}
+        <input ref={replicateImgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleReplicateImageUpload} />
       </div>
 
-      {path !== "replicate" && (
-        <div>
-          <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-            Referencias visuales <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — hasta 6</span>
-          </label>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            {cfg.refImages.map((img, i) => (
-              <div key={i} style={{ position: "relative" }}>
-                <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}` }} />
-                <button onClick={() => set("refImages", cfg.refImages.filter((_, j) => j !== i))}
-                  style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-              </div>
-            ))}
-            {cfg.refImages.length < 6 && (
-              <button onClick={() => refImgRef.current?.click()}
-                style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
-            )}
-          </div>
-          <input ref={refImgRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handleRefImagesUpload} />
-          <p style={{ fontSize: 11, color: T.textLight }}>Ej. moodboard, fotos de campañas anteriores, referencias de estilo. Se analizan una vez al lanzar el lote.</p>
-        </div>
-      )}
-    </div>,
+      <div style={{ marginBottom: 28 }}>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+          Formatos de salida <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>tantos como necesites, con sus medidas</span>
+        </label>
+        {renderFormatsPicker()}
+      </div>
 
-    // Paso 5: Confirmar
-    <div key={5} className="fade-in">
+      {logoBlock}
+    </div>
+  );
+
+  // Paso (scratch only): referencias visuales + logo, opcional.
+  const stepRefsLogo = (
+    <div key="refs-logo" className="fade-in">
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Referencias visuales y logo <span style={{ color: T.textLight, fontWeight: 400, fontSize: 14 }}>(opcional)</span></h2>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Guían las 5 opciones de diseño del piloto. Podés saltear este paso.</p>
+
+      {logoBlock}
+
+      <div>
+        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+          Referencias visuales <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — hasta 6</span>
+        </label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {cfg.refImages.map((img, i) => (
+            <div key={i} style={{ position: "relative" }}>
+              <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}` }} />
+              <button onClick={() => set("refImages", cfg.refImages.filter((_, j) => j !== i))}
+                style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+            </div>
+          ))}
+          {cfg.refImages.length < 6 && (
+            <button onClick={() => refImgRef.current?.click()}
+              style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+          )}
+        </div>
+        <input ref={refImgRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handleRefImagesUpload} />
+        <p style={{ fontSize: 11, color: T.textLight }}>Ej. moodboard, fotos de campañas anteriores, referencias de estilo. Se analizan una vez al lanzar el lote.</p>
+      </div>
+    </div>
+  );
+  // Paso: Confirmar — shared by both paths.
+  const stepConfirm = (
+    <div key="confirm" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Listo para generar</h2>
       <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Revisa la configuración antes de lanzar.</p>
 
@@ -1744,10 +1748,14 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden", marginBottom: 20 }}>
         {[
           ["Marca", brand?.name],
-          ["Objetivo", cfg.goal || "—"],
-          ["Audiencia", cfg.audience.join(", ") || "—"],
-          ["Puntos de dolor", cfg.painPoints.join(" · ") || "—"],
-          ["CTAs", cfg.ctas.join(" / ") || "—"],
+          ...(path === "replicate"
+            ? [["Creatividad a replicar", cfg.replicateImage?.name || "—"]]
+            : [
+                ["Objetivo", cfg.goal || "—"],
+                ["Audiencia", cfg.audience.join(", ") || "—"],
+                ["Puntos de dolor", cfg.painPoints.join(" · ") || "—"],
+                ["CTAs", cfg.ctas.join(" / ") || "—"],
+              ]),
           ["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...(cfg.customDim ? [`Custom ${cfg.customDim}`] : [])].join(", ")],
           ["Variantes por curso", `${cfg.variantCount}`],
           ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} anuncios`],
@@ -1784,12 +1792,19 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
           </div>
         </div>
       )}
-    </div>,
-  ];
+    </div>
+  );
+
+  // Replicate has real fewer variables to set than scratch — brand, the
+  // reference creative + its formats, then courses. No objetivo/audiencia/
+  // dolor/CTAs step at all (copy generation infers those when unset).
+  const steps = path === "replicate"
+    ? [stepBrand, stepReplicateCreative, stepCourses, stepConfirm]
+    : [stepBrand, stepAudience, stepCtasFormats, stepCourses, stepRefsLogo, stepConfirm];
 
   return (
     <div className="fade-in content-area" style={{ flex: 1 }}>
-      <StepIndicator step={step} total={6} />
+      <StepIndicator step={step} total={steps.length} />
       {steps[step]}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36 }}>
         <button onClick={() => setStep(s => Math.max(0, s - 1))} style={{ background: "transparent", color: step === 0 ? T.textLight : T.textMuted, fontSize: 13, padding: "8px 0", opacity: step === 0 ? 0.3 : 1 }} disabled={step === 0}>← Atrás</button>
