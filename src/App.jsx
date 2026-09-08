@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, createContext, useContext } from "react";
 import {
   BUCKETS,
   fetchBrands, saveBrand,
-  fetchRecentBatches, createBatch, updateBatch,
+  fetchRecentBatches, fetchBatch, createBatch, updateBatch,
   fetchCreatives, insertCreative,
   uploadFile, getSignedUrl,
 } from "./lib/supabase";
@@ -379,6 +379,23 @@ async function analyzeRefImages(refImages) {
   return result.trim();
 }
 
+// Richer than analyzeRefImages above — this has to stand in directly for a
+// STYLE_VARIANTS-style direction.description with no brainstorm step to
+// refine it, so it needs to be detailed and concrete enough to hand straight
+// to an image generation model, not just a mood blurb.
+async function analyzeReferenceCreative(imageDataUrl) {
+  if (!imageDataUrl) return "";
+  const result = await callOpenAIVision(
+    "You are a visual art director. Analyze this ad creative and describe its background/visual design in enough concrete detail to regenerate an equivalent design for a different course, with different photographic content. Describe: composition and layout zones, color blocks and palette, photographic treatment/style, where empty/reserved space sits (for a logo and text overlay). Do NOT describe or transcribe any text, headline, or logo visible in the image — those get replaced separately. Return ONLY the description, 3-5 sentences, no markdown, no preamble.",
+    [
+      { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
+      { type: "text", text: "Describe this creative's background/visual design for exact replication with different content." },
+    ],
+    400
+  );
+  return result.trim();
+}
+
 // ─── IMAGE GENERATION ────────────────────────────────────────────────
 // gpt-image-1 only accepts these three sizes (plus "auto") — no arbitrary dims.
 const FORMAT_SIZES = {
@@ -396,6 +413,16 @@ function customDimToSize(dim) {
   if (ratio > 1.3) return { w, h, api: "1536x1024" };
   if (ratio < 0.8) return { w, h, api: "1024x1536" };
   return { w, h, api: "1024x1024" };
+}
+
+// Image cost is driven purely by generateImage() calls, not by format count
+// or variantCount — every format is compositeAd'd from the SAME generated
+// image, and variantCount only repeats the (much cheaper) copy/text call.
+// So: pilot flow = 5 (candidates) + 1 per remaining course; otherwise 1 per
+// course. pricePerImage is a rough gpt-image-1 ballpark, not a live quote.
+function estimateBatchCost(courseCount, usePilotFlowEstimate, pricePerImage = 0.04) {
+  const imagesEstimate = usePilotFlowEstimate ? 5 + Math.max(0, courseCount - 1) : courseCount;
+  return { imagesEstimate, costEstimate: imagesEstimate * pricePerImage };
 }
 
 async function generateImagePrompt(brandConfig, courseData, research, copy) {
@@ -560,12 +587,14 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   ctx.shadowColor = "rgba(0,0,0,0.65)"; ctx.shadowBlur = 12;
   const hlSize = Math.round(height * 0.052);
   ctx.font = `bold ${hlSize}px ${displayFont}`; ctx.fillStyle = textOverlay;
-  const hlEndY = wrapText(copy.headline, pad, height * 0.58, width - pad * 2, hlSize * 1.25, 3);
+  const hlStartY = height * 0.58;
+  const hlEndY = wrapText(copy.headline, pad, hlStartY, width - pad * 2, hlSize * 1.25, 3);
 
   // Body
   const bdSize = Math.round(height * 0.027);
   ctx.font = `${bdSize}px ${bodyFontFam}`; ctx.fillStyle = `${textOverlay}dd`; ctx.shadowBlur = 6;
-  const bdEndY = wrapText(copy.body, pad, hlEndY + hlSize * 0.5, width - pad * 2, bdSize * 1.45, 3);
+  const bdStartY = hlEndY + hlSize * 0.5;
+  const bdEndY = wrapText(copy.body, pad, bdStartY, width - pad * 2, bdSize * 1.45, 3);
 
   // CTA pill
   ctx.shadowBlur = 0;
@@ -619,7 +648,28 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
     }
   }
 
-  return canvas.toDataURL("image/png");
+  const qaIssues = qaCheckComposite([
+    { label: "headline", x: pad,   y: hlStartY, w: width - pad * 2, h: Math.max(0, hlEndY - hlStartY) },
+    { label: "body",     x: pad,   y: bdStartY, w: width - pad * 2, h: Math.max(0, bdEndY - bdStartY) },
+    { label: "cta",      x: pad,   y: ctaBoxY,  w: ctaBoxW,          h: ctaBoxH },
+  ], width, height);
+
+  return { dataUrl: canvas.toDataURL("image/png"), qaIssues };
+}
+
+// Pure bbox check against each text block drawn by compositeAd above —
+// doesn't block/reject anything, just flags cards worth a closer look in
+// manual review (ImageApprovalGrid). No contrast heuristic: that'd false-
+// positive constantly against arbitrary generated photo backgrounds.
+function qaCheckComposite(boxes, width, height) {
+  const safeMargin = width * 0.03;
+  const issues = [];
+  for (const box of boxes) {
+    if (box.h <= 0) continue;
+    if (box.y + box.h > height - safeMargin) issues.push({ type: "overflow", label: box.label });
+    if (box.x < safeMargin || box.x + box.w > width - safeMargin) issues.push({ type: "margin", label: box.label });
+  }
+  return issues;
 }
 
 // ─── CSV / XLSX PARSER ──────────────────────────────────────────────
@@ -722,7 +772,7 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
   const pendingCount = batches.filter(b => b.status === "review").length;
   const navItems = [
     { id: "dashboard", label: "Tablero" },
-    { id: "generate",  label: "Generar",  badge: "nuevo" },
+    { id: "generate",  label: "Generar",  badge: "nuevo", navTo: "generate-choice" },
     { id: "batches",   label: "Lotes",    badge: pendingCount > 0 ? pendingCount : null },
     { id: "brands",    label: "Marcas" },
   ];
@@ -748,9 +798,9 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
       </div>
       <nav style={{ flex: 1, padding: "12px 0" }}>
         {navItems.map(item => {
-          const isActive = active === item.id;
+          const isActive = active === item.id || (item.id === "generate" && active === "generate-choice");
           return (
-            <button key={item.id} onClick={() => { onNav(item.id); onClose?.(); }}
+            <button key={item.id} onClick={() => { onNav(item.navTo || item.id); onClose?.(); }}
               style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", background: isActive ? activeItemBg : "transparent", color: isActive ? T.sidebarAct : T.sidebarText, fontSize: 13, fontWeight: isActive ? 600 : 400, letterSpacing: "0.01em", transition: "all 0.15s", borderLeft: isActive ? `2px solid ${T.teal}` : "2px solid transparent" }}>
               <span>{item.label}</span>
               {item.badge && (
@@ -1174,7 +1224,46 @@ function SelectPill({ label, selected, onClick, accent }) {
   );
 }
 
-function Generate({ brands, onBatchCreated, onSaveBrand }) {
+// ─── GENERATE CHOICE ────────────────────────────────────────────────────
+// Fork shown before the wizard: build from scratch off the brand's own
+// rules (today's pilot: 5 AI-brainstormed directions to approve), or
+// replicate one existing creative the user already has, straight across
+// every course with no brainstorm/approval step.
+function GenerateChoice({ onChoose }) {
+  const T = useTheme();
+  const cards = [
+    {
+      path: "scratch",
+      title: "Crear desde cero",
+      desc: "La IA brainstormea 5 direcciones de diseño basadas en el brandbook de la marca. Elegís una y se replica en todos los cursos del CSV.",
+    },
+    {
+      path: "replicate",
+      title: "Replicar una creatividad existente",
+      desc: "Subís una imagen de referencia (un anuncio ya hecho), la IA la analiza, y ese mismo diseño se replica en todos los cursos — solo cambian título, keywords e imagen.",
+    },
+  ];
+  return (
+    <div className="fade-in content-area" style={{ flex: 1, padding: "40px 32px", maxWidth: 900 }}>
+      <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 8 }}>¿Cómo querés generar este lote?</h1>
+      <p style={{ fontSize: 14, color: T.textMuted, marginBottom: 32 }}>Elegí un camino — el resto del wizard se adapta según cuál elijas.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        {cards.map(c => (
+          <button key={c.path} onClick={() => onChoose(c.path)}
+            style={{ textAlign: "left", background: T.card, border: `1.5px solid ${T.cardBorder}`, borderRadius: 16, padding: "28px 24px", display: "flex", flexDirection: "column", gap: 10, transition: "border-color 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = T.text}
+            onMouseLeave={e => e.currentTarget.style.borderColor = T.cardBorder}>
+            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.01em" }}>{c.title}</div>
+            <div style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.5 }}>{c.desc}</div>
+            <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: T.blueMid }}>Elegir →</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   const T = useTheme();
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({
@@ -1189,6 +1278,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
     variantCount: 1,
     customDim: "",
     refImages: [],
+    replicateImage: null,
   });
   const [customAudience, setCustomAudience] = useState("");
   const [customPain, setCustomPain] = useState("");
@@ -1202,6 +1292,46 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
     setCfg(p => ({ ...p, [key]: p[key].includes(val) ? p[key].filter(x => x !== val) : [...p[key], val] }));
   }
   function set(key, val) { setCfg(p => ({ ...p, [key]: val })); }
+
+  // Shared between step 2 (scratch path) and step 4 (replicate path, next to
+  // the uploaded reference creative) — same grid, same cfg.formats/customDim.
+  function renderFormatsPicker() {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+        {FORMATS.map(f => {
+          const sel = cfg.formats.includes(f.id);
+          const w = f.ratio === "9:16" ? 18 : f.ratio === "4:5" ? 22 : f.ratio === "1:1" ? 26 : 36;
+          const h = f.ratio === "1.9:1" ? 18 : 26;
+          return (
+            <button key={f.id} onClick={() => toggle("formats", f.id)} style={{ padding: 12, border: `1.5px solid ${sel ? T.text : T.cardBorder}`, borderRadius: 12, background: sel ? T.text : T.card, textAlign: "left", transition: "all 0.15s" }}>
+              <div style={{ width: w, height: h, border: `1.5px solid ${sel ? T.cream : T.cardBorder}`, borderRadius: 3, marginBottom: 8, opacity: sel ? 0.6 : 1 }} />
+              <div style={{ fontSize: 11, fontWeight: 600, color: sel ? T.cream : T.text, marginBottom: 2 }}>{f.label}</div>
+              <div style={{ fontSize: 10, color: sel ? "#888" : T.textMuted }}>{f.dim}</div>
+            </button>
+          );
+        })}
+        {/* Custom format */}
+        {(() => {
+          const hasCustom = cfg.customDim.trim().length > 0;
+          return (
+            <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? "#EAF7F6" : T.card, textAlign: "left", transition: "all 0.15s" }}>
+              <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? T.accentDark : T.cardBorder}`, borderRadius: 3, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: 9, color: hasCustom ? T.accentDark : T.textMuted, fontWeight: 700 }}>+</span>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: T.text, marginBottom: 5 }}>Personalizado</div>
+              <input
+                value={cfg.customDim}
+                onChange={e => set("customDim", e.target.value)}
+                placeholder="1200×800"
+                onClick={e => e.stopPropagation()}
+                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${T.cardBorder}`, borderRadius: 5, background: T.cream, fontSize: 10, color: T.text, fontFamily: "monospace" }}
+              />
+            </div>
+          );
+        })()}
+      </div>
+    );
+  }
 
   const logoRef = useRef();
   function handleLogoUpload(e) {
@@ -1221,6 +1351,14 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
     }))).then(loaded => set("refImages", [...cfg.refImages, ...loaded].slice(0, 6)));
   }
 
+  const replicateImgRef = useRef();
+  function handleReplicateImageUpload(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => set("replicateImage", { name: file.name, data: ev.target.result });
+    reader.readAsDataURL(file);
+  }
+
   const fileRef = useRef();
   async function handleFile(e) {
     const file = e.target.files[0]; if (!file) return;
@@ -1238,14 +1376,21 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
     }
   }
 
+  const hasFormats = cfg.formats.length > 0 || cfg.customDim.trim().length > 0;
+  const usePilotFlowEstimate = path !== "replicate" && hasApiKey() && cfg.courses.length > 0 && cfg.courses.some(c => c.keywords5?.length);
+  const { imagesEstimate, costEstimate } = estimateBatchCost(cfg.courses.length, usePilotFlowEstimate);
+  const [showCostConfirm, setShowCostConfirm] = useState(false);
+
   // Objetivo, audiencia, puntos de dolor y CTAs son opcionales — solo marca,
-  // formatos y cursos son obligatorios para poder generar algo.
+  // formatos y cursos son obligatorios para poder generar algo. En el camino
+  // "replicate" los formatos se eligen recién en el paso 4 (junto a la
+  // creatividad de referencia), así que el paso 2 no los exige.
   const canProceed = [
     !!cfg.brandId,
     true,
-    cfg.formats.length > 0 || cfg.customDim.trim().length > 0,
+    path === "replicate" ? true : hasFormats,
     cfg.courses.length > 0,
-    true, // referencias visuales + logo — opcional
+    path === "replicate" ? (!!cfg.replicateImage && hasFormats) : true, // scratch: opcional. replicate: imagen + formato obligatorios
     true,
   ][step];
 
@@ -1253,13 +1398,26 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
 
   async function launchBatch() {
     setLaunching(true);
-    // Referencias visuales del lote (si las hay) se resumen una sola vez acá,
-    // en un descriptor de texto que guía las 5 direcciones del piloto —
-    // evita repetir el análisis de imagen en cada corrida del pipeline.
-    let refImageDescriptor = "";
-    if (cfg.refImages.length && hasApiKey()) {
-      try { refImageDescriptor = await analyzeRefImages(cfg.refImages); }
-      catch (err) { console.warn("No se pudieron analizar las referencias visuales:", err.message); }
+    let extraConfig = { path };
+    if (path === "replicate") {
+      // Analiza la creatividad de referencia UNA vez acá — reemplaza por completo
+      // el brainstorm de 5 direcciones + revisión: este es el único diseño,
+      // se replica tal cual en cada curso (BatchProcessor lo detecta via
+      // config.path === "replicate" y arranca con winningDirection ya fijado).
+      let replicateStyleDescriptor = "";
+      try { replicateStyleDescriptor = await analyzeReferenceCreative(cfg.replicateImage?.data); }
+      catch (err) { console.warn("No se pudo analizar la creatividad de referencia:", err.message); }
+      extraConfig.replicateStyleDescriptor = replicateStyleDescriptor;
+    } else {
+      // Referencias visuales del lote (si las hay) se resumen una sola vez acá,
+      // en un descriptor de texto que guía las 5 direcciones del piloto —
+      // evita repetir el análisis de imagen en cada corrida del pipeline.
+      let refImageDescriptor = "";
+      if (cfg.refImages.length && hasApiKey()) {
+        try { refImageDescriptor = await analyzeRefImages(cfg.refImages); }
+        catch (err) { console.warn("No se pudieron analizar las referencias visuales:", err.message); }
+      }
+      extraConfig.refImageDescriptor = refImageDescriptor;
     }
     const batch = {
       id: Date.now().toString(),
@@ -1269,13 +1427,13 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
       status: "generating",
       createdAt: new Date().toISOString(),
       adsCount: 0,
-      config: { ...cfg, refImageDescriptor },
+      config: { ...cfg, ...extraConfig },
       items: [],
     };
     onBatchCreated(batch);
     setLaunching(false);
     setStep(0);
-    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", refImages: [] });
+    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", refImages: [], replicateImage: null });
   }
 
   const steps = [
@@ -1408,42 +1566,12 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
         </div>
       </div>
 
-      <div>
-        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Formatos de anuncio</label>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
-          {FORMATS.map(f => {
-            const sel = cfg.formats.includes(f.id);
-            const w = f.ratio === "9:16" ? 18 : f.ratio === "4:5" ? 22 : f.ratio === "1:1" ? 26 : 36;
-            const h = f.ratio === "1.9:1" ? 18 : 26;
-            return (
-              <button key={f.id} onClick={() => toggle("formats", f.id)} style={{ padding: 12, border: `1.5px solid ${sel ? T.text : T.cardBorder}`, borderRadius: 12, background: sel ? T.text : T.card, textAlign: "left", transition: "all 0.15s" }}>
-                <div style={{ width: w, height: h, border: `1.5px solid ${sel ? T.cream : T.cardBorder}`, borderRadius: 3, marginBottom: 8, opacity: sel ? 0.6 : 1 }} />
-                <div style={{ fontSize: 11, fontWeight: 600, color: sel ? T.cream : T.text, marginBottom: 2 }}>{f.label}</div>
-                <div style={{ fontSize: 10, color: sel ? "#888" : T.textMuted }}>{f.dim}</div>
-              </button>
-            );
-          })}
-          {/* Custom format */}
-          {(() => {
-            const hasCustom = cfg.customDim.trim().length > 0;
-            return (
-              <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? "#EAF7F6" : T.card, textAlign: "left", transition: "all 0.15s" }}>
-                <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? T.accentDark : T.cardBorder}`, borderRadius: 3, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <span style={{ fontSize: 9, color: hasCustom ? T.accentDark : T.textMuted, fontWeight: 700 }}>+</span>
-                </div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: T.text, marginBottom: 5 }}>Personalizado</div>
-                <input
-                  value={cfg.customDim}
-                  onChange={e => set("customDim", e.target.value)}
-                  placeholder="1200×800"
-                  onClick={e => e.stopPropagation()}
-                  style={{ width: "100%", padding: "3px 6px", border: `1px solid ${T.cardBorder}`, borderRadius: 5, background: T.cream, fontSize: 10, color: T.text, fontFamily: "monospace" }}
-                />
-              </div>
-            );
-          })()}
+      {path !== "replicate" && (
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Formatos de anuncio</label>
+          {renderFormatsPicker()}
         </div>
-      </div>
+      )}
     </div>,
 
     // Paso 3: Cargar cursos
@@ -1508,10 +1636,50 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
       })()}
     </div>,
 
-    // Paso 4: Referencias visuales + logo
+    // Paso 4: fork — scratch: referencias + logo (opcional). replicate: creatividad a replicar + formatos (obligatorio) + logo.
     <div key={4} className="fade-in">
-      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Referencias visuales y logo <span style={{ color: T.textLight, fontWeight: 400, fontSize: 14 }}>(opcional)</span></h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Guían las 5 opciones de diseño del piloto. Podés saltear este paso.</p>
+      {path === "replicate" ? (
+        <>
+          <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Creatividad a replicar</h2>
+          <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Subí un anuncio ya existente — se analiza y ese mismo diseño se replica en todos los cursos, cambiando solo título, keywords e imagen.</p>
+        </>
+      ) : (
+        <>
+          <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Referencias visuales y logo <span style={{ color: T.textLight, fontWeight: 400, fontSize: 14 }}>(opcional)</span></h2>
+          <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Guían las 5 opciones de diseño del piloto. Podés saltear este paso.</p>
+        </>
+      )}
+
+      {path === "replicate" && (
+        <>
+          <div style={{ marginBottom: 28 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+              Imagen de referencia <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>obligatorio</span>
+            </label>
+            {cfg.replicateImage ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
+                <img src={cfg.replicateImage.data} alt={cfg.replicateImage.name} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
+                <span style={{ fontSize: 12, color: T.textMuted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cfg.replicateImage.name}</span>
+                <button onClick={() => set("replicateImage", null)} style={{ fontSize: 11, color: T.textMuted, background: "transparent" }}>Cambiar ×</button>
+              </div>
+            ) : (
+              <div onClick={() => replicateImgRef.current?.click()}
+                style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 12, padding: "28px 20px", textAlign: "center", cursor: "pointer", background: T.card }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Subir creatividad de referencia</div>
+                <div style={{ fontSize: 12, color: T.textMuted }}>PNG o JPG — un anuncio ya hecho, de esta marca o de otra</div>
+              </div>
+            )}
+            <input ref={replicateImgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleReplicateImageUpload} />
+          </div>
+
+          <div style={{ marginBottom: 28 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+              Formatos de salida <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>tantos como necesites, con sus medidas</span>
+            </label>
+            {renderFormatsPicker()}
+          </div>
+        </>
+      )}
 
       <div style={{ marginBottom: 28 }}>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
@@ -1538,26 +1706,28 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
         )}
       </div>
 
-      <div>
-        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Referencias visuales <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — hasta 6</span>
-        </label>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          {cfg.refImages.map((img, i) => (
-            <div key={i} style={{ position: "relative" }}>
-              <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}` }} />
-              <button onClick={() => set("refImages", cfg.refImages.filter((_, j) => j !== i))}
-                style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-            </div>
-          ))}
-          {cfg.refImages.length < 6 && (
-            <button onClick={() => refImgRef.current?.click()}
-              style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
-          )}
+      {path !== "replicate" && (
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
+            Referencias visuales <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — hasta 6</span>
+          </label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            {cfg.refImages.map((img, i) => (
+              <div key={i} style={{ position: "relative" }}>
+                <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}` }} />
+                <button onClick={() => set("refImages", cfg.refImages.filter((_, j) => j !== i))}
+                  style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+              </div>
+            ))}
+            {cfg.refImages.length < 6 && (
+              <button onClick={() => refImgRef.current?.click()}
+                style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+            )}
+          </div>
+          <input ref={refImgRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handleRefImagesUpload} />
+          <p style={{ fontSize: 11, color: T.textLight }}>Ej. moodboard, fotos de campañas anteriores, referencias de estilo. Se analizan una vez al lanzar el lote.</p>
         </div>
-        <input ref={refImgRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handleRefImagesUpload} />
-        <p style={{ fontSize: 11, color: T.textLight }}>Ej. moodboard, fotos de campañas anteriores, referencias de estilo. Se analizan una vez al lanzar el lote.</p>
-      </div>
+      )}
     </div>,
 
     // Paso 5: Confirmar
@@ -1592,13 +1762,28 @@ function Generate({ brands, onBatchCreated, onSaveBrand }) {
 
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} creatividades</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
           <div style={{ fontSize: 11, color: "#888" }}>La IA investigará cada URL y generará copy + prompts de imagen</div>
         </div>
-        <button onClick={launchBatch} disabled={launching} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap", opacity: launching ? 0.7 : 1, cursor: launching ? "wait" : "pointer" }}>
+        <button onClick={() => setShowCostConfirm(true)} disabled={launching} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap", opacity: launching ? 0.7 : 1, cursor: launching ? "wait" : "pointer" }}>
           {launching ? "Analizando referencias…" : "✦ Lanzar lote"}
         </button>
       </div>
+
+      {showCostConfirm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300 }} onClick={() => setShowCostConfirm(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: T.card, borderRadius: 16, padding: "28px 26px", maxWidth: 380, width: "90%", boxShadow: "0 12px 40px rgba(0,0,0,0.25)" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>¿Lanzar este lote?</div>
+            <p style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.5, marginBottom: 22 }}>
+              Este lote generará <strong>~{imagesEstimate} imágenes</strong> (≈<strong>${costEstimate.toFixed(2)}</strong> estimado). Esta acción no se puede pausar a mitad de camino sin costo ya incurrido.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button onClick={() => setShowCostConfirm(false)} style={{ background: "transparent", color: T.textMuted, fontSize: 13, fontWeight: 500, padding: "9px 18px", border: `1px solid ${T.cardBorder}`, borderRadius: 999 }}>Cancelar</button>
+              <button onClick={() => { setShowCostConfirm(false); launchBatch(); }} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "9px 20px", borderRadius: 999 }}>Continuar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>,
   ];
 
@@ -1632,12 +1817,57 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const pilotResolverRef = useRef(null);
   const dbBatchIdRef = useRef(null);
   const errorMessageRef = useRef(null);
+  const imagedCourseIndicesRef = useRef([]);
+  // Set only when reopening an interrupted batch (reload/closed tab) — see
+  // persistBatchStart. { doneIndices, byCourseIndex, winningDirection }.
+  const resumeStateRef = useRef(null);
 
   // Best-effort Supabase persistence — must never break the core generation
   // pipeline. Every call here is self-contained: catches its own errors,
   // logs, and simply no-ops (dbBatchIdRef stays null) if Supabase is
   // unreachable, exactly like the app already behaves without persistence.
+  //
+  // Checkpoint/resume: only *imaging* is checkpointed (config.imaged_course_ids
+  // + the winning style direction, once known). Research/copy for courses not
+  // yet imaged are never persisted mid-flight, so those still redo from
+  // scratch on resume — full-pipeline resumability would need persisting
+  // those too, a separate, larger change.
   async function persistBatchStart() {
+    // batch.dbId + no in-memory items = reopened from the batches list (a
+    // previous session), not a batch just created in this one — try to
+    // resume it instead of creating a duplicate row.
+    if (batch.dbId && !batch.items?.length) {
+      try {
+        const row = await fetchBatch(batch.dbId);
+        dbBatchIdRef.current = row.id;
+        const doneIndices = new Set(row.config?.imaged_course_ids || []);
+        if (doneIndices.size) {
+          imagedCourseIndicesRef.current = [...doneIndices];
+          const creativeRows = await fetchCreatives(row.id);
+          const byCourseIndex = {};
+          for (const c of creativeRows) {
+            const idx = c.params_json?.courseIndex;
+            if (idx == null) continue;
+            if (!byCourseIndex[idx]) {
+              byCourseIndex[idx] = {
+                name: c.params_json?.name, siglas: c.params_json?.siglas, nivel: c.params_json?.nivel,
+                url: c.params_json?.url, keywords5: c.params_json?.keywords5,
+                status: "imaged", copies: [c.params_json?.copy || {}], imagePrompt: c.params_json?.imagePrompt || "",
+                composited: {},
+              };
+            }
+            if (c.image_path) {
+              try { byCourseIndex[idx].composited[c.format_label || c.id] = await getSignedUrl(BUCKETS.creatives, c.image_path); }
+              catch (err) { console.warn("[supabase] No se pudo firmar creatividad al retomar:", err.message); }
+            }
+          }
+          resumeStateRef.current = { doneIndices, byCourseIndex, winningDirection: row.config?.winningDirection || null };
+        }
+        return;
+      } catch (err) {
+        console.warn("[supabase] No se pudo retomar el lote, se crea uno nuevo:", err.message);
+      }
+    }
     try {
       const row = await createBatch({
         name: batch.name || null,
@@ -1659,6 +1889,25 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       await updateBatch(dbBatchIdRef.current, { status, completed_at: new Date().toISOString(), ...extra });
     } catch (err) {
       console.warn("[supabase] No se pudo actualizar el lote en la base:", err.message);
+    }
+  }
+
+  // Called once the style direction is locked in (pilot review resolved, or
+  // immediately for replicate) — so an interruption *after* this point can
+  // still resume without re-asking the user to pick a pilot winner again.
+  async function persistWinningDirection(direction) {
+    if (!dbBatchIdRef.current) return;
+    try { await updateBatch(dbBatchIdRef.current, { config: { ...batch.config, winningDirection: direction } }); }
+    catch (err) { console.warn("[supabase] No se pudo guardar el diseño elegido:", err.message); }
+  }
+
+  async function persistBatchProgress(courseIndex) {
+    if (!dbBatchIdRef.current) return;
+    imagedCourseIndicesRef.current = [...imagedCourseIndicesRef.current, courseIndex];
+    try {
+      await updateBatch(dbBatchIdRef.current, { config: { ...batch.config, imaged_course_ids: imagedCourseIndicesRef.current } });
+    } catch (err) {
+      console.warn("[supabase] No se pudo guardar el progreso del lote:", err.message);
     }
   }
 
@@ -1701,6 +1950,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     pilotResolverRef.current = null;
     dbBatchIdRef.current = null;
     errorMessageRef.current = null;
+    imagedCourseIndicesRef.current = [];
+    resumeStateRef.current = null;
     setItems([]);
     setPilotDirections([]);
     setPilotCandidates([]);
@@ -1761,11 +2012,20 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     const primaryApiSize = formatList[0]?.api || "1024x1024";
 
     await persistBatchStart();
+    const resume = resumeStateRef.current; // set only when reopening an interrupted batch
 
     setPhase("researching");
     for (let i = 0; i < total; i++) {
       await waitIfPaused();
       if (isCancelledRef.current) return;
+      if (resume?.doneIndices.has(i)) {
+        // Already fully imaged before the interruption — reuse the persisted
+        // creative(s), skip research/copy/imaging for this course entirely.
+        researched.push({ ...courses[i], ...resume.byCourseIndex[i] });
+        setItems(prev => [...prev, researched[i]]);
+        setProgress(Math.round(((i + 1) / total) * 25));
+        continue;
+      }
       const c = courses[i];
       setItems(prev => [...prev, { ...c, status: "researching", research: null }]);
       try {
@@ -1787,9 +2047,20 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     // style directions (bound to the brand's own colors/tone/image rules) are
     // rendered for it, the user approves one, and that same direction (only
     // title/keywords swapped) replicates across the rest of the courses.
-    const usePilotFlow = hasKeywordsCSV && hasApiKey() && researched.length > 0;
-    let winningDirection = null;
+    // "replicate" path skips all of this — the user already supplied THE
+    // design (one analyzed reference creative), so it's locked in up front
+    // and every course (including index 0) goes straight through the normal
+    // per-course loop below with no brainstorm/candidates/review step.
+    // Resuming an interrupted batch works the same way once the winning
+    // direction was already persisted (persistWinningDirection) — no need to
+    // re-ask the user to pick a pilot winner again.
+    const isReplicatePath = batch.config.path === "replicate";
+    const usePilotFlow = !isReplicatePath && !resume?.winningDirection && hasKeywordsCSV && hasApiKey() && researched.length > 0;
+    let winningDirection = resume?.winningDirection || (isReplicatePath
+      ? { id: "replicated", label: "Creatividad replicada", description: batch.config.replicateStyleDescriptor || "" }
+      : null);
     let pilotStartIdx = 0;
+    if (isReplicatePath && !resume) persistWinningDirection(winningDirection);
 
     if (usePilotFlow && researched[0].status === "researchFailed") {
       // Can't build a pilot design without research on course 0 — surface it and stop.
@@ -1836,7 +2107,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           const imageB64 = await generateImage(prompt, primaryApiSize);
           if (isCancelledRef.current) return;
           const composited = {};
-          for (const fmt of formatList) composited[fmt.key] = await compositeAd(imageB64, pilotCopy, brand, fmt.w, fmt.h);
+          for (const fmt of formatList) composited[fmt.key] = (await compositeAd(imageB64, pilotCopy, brand, fmt.w, fmt.h)).dataUrl;
           candidates.push({ styleId: direction.id, label: direction.label, composited });
         } catch (err) {
           candidates.push({ styleId: direction.id, label: direction.label, error: err.message });
@@ -1850,6 +2121,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       const chosenId = await new Promise(resolve => { pilotResolverRef.current = resolve; });
       if (isCancelledRef.current || !chosenId) return;
       winningDirection = directions.find(d => d.id === chosenId) || null;
+      persistWinningDirection(winningDirection);
 
       const winner = candidates.find(c => c.styleId === chosenId);
       const pilotImagePrompt = winningDirection ? buildStyleVariantPrompt(winningDirection, brand, pilotCourse, pilotCourse.keywords5) : "";
@@ -1863,6 +2135,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         const fmtMeta = formatList.find(f => f.key === fmtKey);
         persistCreative(0, researched[0], pilotCopy, pilotImagePrompt, fmtKey, fmtMeta, dataUrl);
       }
+      persistBatchProgress(0);
       pilotStartIdx = 1;
       setProgress(45);
     }
@@ -1875,7 +2148,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       await waitIfPaused();
       if (isCancelledRef.current) return;
       const c = researched[i];
-      if (c.status === "researchFailed") {
+      if (c.status === "researchFailed" || c.status === "imaged") {
+        // "imaged" here means a resumed course already fully done pre-interruption.
         setProgress(copyBase + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 25));
         continue;
       }
@@ -1904,7 +2178,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         await waitIfPaused();
         if (isCancelledRef.current) return;
         const item = researched[i];
-        if (item.status === "researchFailed" || item.status === "copyFailed") {
+        if (item.status === "researchFailed" || item.status === "copyFailed" || item.status === "imaged") {
+          // "imaged" here means a resumed course already fully done pre-interruption.
           setProgress(70 + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 30));
           continue;
         }
@@ -1918,12 +2193,16 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           const imageB64 = await generateImage(imagePrompt, primaryApiSize);
           if (isCancelledRef.current) return;
           const composited = {};
+          const qaIssues = {};
           for (const fmt of formatList) {
-            composited[fmt.key] = await compositeAd(imageB64, firstCopy, brand, fmt.w, fmt.h);
+            const result = await compositeAd(imageB64, firstCopy, brand, fmt.w, fmt.h);
+            composited[fmt.key] = result.dataUrl;
+            qaIssues[fmt.key] = result.qaIssues;
             setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging", composited: { ...composited } } : it));
             persistCreative(i, item, firstCopy, imagePrompt, fmt.key, fmt, composited[fmt.key]);
           }
-          researched[i] = { ...item, status: "imaged", imagePrompt, composited };
+          researched[i] = { ...item, status: "imaged", imagePrompt, composited, qaIssues };
+          persistBatchProgress(i);
         } catch (err) {
           researched[i] = { ...item, status: "imageFailed", imageError: err.message };
         }
@@ -2104,7 +2383,7 @@ function Batches({ batches, onOpen, onNav }) {
     <div className="fade-in" style={{ padding: "40px 40px", flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Lotes</h1>
-        <button onClick={() => onNav("generate")} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 18px", borderRadius: 999, display: "flex", alignItems: "center", gap: 6 }}>+ Nuevo lote</button>
+        <button onClick={() => onNav("generate-choice")} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 500, padding: "8px 18px", borderRadius: 999, display: "flex", alignItems: "center", gap: 6 }}>+ Nuevo lote</button>
       </div>
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 140px 80px 120px 100px", padding: "8px 20px", background: T.cream, borderBottom: `1px solid ${T.cardBorder}` }}>
@@ -2679,17 +2958,19 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
         ? { w: parseInt(fmt.dim), h: parseInt(fmt.dim.split("×")[1]) }
         : customDimToSize(fmtKey);
       const cardKey = `${itemIdx}-${fmtKey}`;
-      cards.push({ itemIdx, item, fmtKey, dataURL, label, fmtSize, cardKey });
+      const qaIssues = item.qaIssues?.[fmtKey] || [];
+      cards.push({ itemIdx, item, fmtKey, dataURL, label, fmtSize, cardKey, qaIssues });
     });
   });
 
   if (cards.length === 0) return null;
 
   const CARD_H = 180;
+  const QA_LABELS = { overflow: "texto se sale del margen inferior", margin: "texto pegado al borde" };
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-      {cards.map(({ item, fmtKey, dataURL, label, fmtSize, cardKey }) => {
+      {cards.map(({ item, fmtKey, dataURL, label, fmtSize, cardKey, qaIssues }) => {
         const isApproved = approved.has(cardKey);
         const previewW = Math.max(90, Math.round(CARD_H * (fmtSize.w / fmtSize.h)));
         const firstCopy = Array.isArray(item.copies) ? item.copies[0] : (item.copies || {});
@@ -2706,6 +2987,13 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
               <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(32,32,32,0.7)", color: "#fff", fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, letterSpacing: "0.05em" }}>
                 {label}
               </div>
+              {/* QA flag — doesn't block/filter anything, just flags what to check first */}
+              {qaIssues.length > 0 && (
+                <div title={qaIssues.map(i => QA_LABELS[i.type] || i.type).join(" · ")}
+                  style={{ position: "absolute", bottom: 8, left: 8, background: "#F5A623", color: "#202020", fontSize: 11, fontWeight: 700, width: 20, height: 20, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 6px rgba(0,0,0,0.25)" }}>
+                  ⚠
+                </div>
+              )}
             </div>
             {/* Info */}
             <div style={{ padding: "8px 10px", borderTop: `1px solid ${T.cardBorder}` }}>
@@ -2848,7 +3136,7 @@ function BatchDetail({ batch, onBack }) {
             ["CTAs",            batch.config?.ctas?.join(" / ")],
             ["Formatos",        batch.config?.formats?.map(f => FORMATS.find(x => x.id === f)?.label).join(", ")],
             ["Cursos",          `${batch.config?.courses?.length || 0} cargados`],
-            ...(batch.config?.winningStyleLabel ? [["Diseño ganador (piloto)", batch.config.winningStyleLabel]] : []),
+            ...(batch.config?.winningStyleLabel ? [["Diseño", batch.config.winningStyleLabel]] : []),
           ].map(([k, v]) => (
             <div key={k}>
               <div style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 3 }}>{k}</div>
@@ -2898,6 +3186,7 @@ function BatchDetail({ batch, onBack }) {
 // ─── ROOT APP ────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
+  const [generatePath, setGeneratePath] = useState(null); // "scratch" | "replicate"
   const [batches, setBatches] = useState([]);
   const [brands, setBrands] = useState(DEFAULT_BRANDS);
   const [activeBatch, setActiveBatch] = useState(null);
@@ -2993,10 +3282,22 @@ export default function App() {
       }
     })();
   }
-  function openBatch(b) { setActiveBatch(b); setScreen("batch-detail"); }
+  function openBatch(b) {
+    // A batch reopened from the DB list mid-generation (reload/closed tab,
+    // status still "generating") resumes the pipeline instead of showing a
+    // static detail view — BatchProcessor's persistBatchStart detects
+    // batch.dbId + no in-memory items and picks up from imaged_course_ids.
+    if (b.status === "generating" && b.dbId && !b.items?.length) {
+      setProcessingBatch(b);
+      setScreen("processing");
+      return;
+    }
+    setActiveBatch(b);
+    setScreen("batch-detail");
+  }
 
   const creditsLeft = Math.max(0, 847 - batches.reduce((a, b) => a + (b.adsCount || 0), 0));
-  const titleMap = { dashboard: "resumen", generate: "nuevo lote", batches: "todos los lotes", brands: "estudio de marca", processing: "procesando", "batch-detail": "detalle del lote" };
+  const titleMap = { dashboard: "resumen", "generate-choice": "nuevo lote", generate: "nuevo lote", batches: "todos los lotes", brands: "estudio de marca", processing: "procesando", "batch-detail": "detalle del lote" };
 
   return (
     <ThemeContext.Provider value={{ tokens, themeName, toggle: toggleTheme }}>
@@ -3005,10 +3306,11 @@ export default function App() {
         <div className={`app-overlay${sidebarOpen ? " sidebar-open" : ""}`} onClick={() => setSidebarOpen(false)} />
         <Sidebar active={screen} onNav={setScreen} batches={batches} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <div className="app-content">
-          <TopBar title={titleMap[screen] || screen} creditsLeft={creditsLeft} onNewBatch={() => setScreen("generate")} onMenuToggle={() => setSidebarOpen(o => !o)} />
+          <TopBar title={titleMap[screen] || screen} creditsLeft={creditsLeft} onNewBatch={() => setScreen("generate-choice")} onMenuToggle={() => setSidebarOpen(o => !o)} />
           <main style={{ flex: 1, overflowY: "auto", display: "flex" }}>
-            {screen === "dashboard"    && <Dashboard batches={batches} onNewBatch={() => setScreen("generate")} onNav={setScreen} />}
-            {screen === "generate"     && <Generate brands={brands} onBatchCreated={onBatchCreated} onSaveBrand={onSaveBrand} />}
+            {screen === "dashboard"    && <Dashboard batches={batches} onNewBatch={() => setScreen("generate-choice")} onNav={setScreen} />}
+            {screen === "generate-choice" && <GenerateChoice onChoose={p => { setGeneratePath(p); setScreen("generate"); }} />}
+            {screen === "generate"     && <Generate brands={brands} onBatchCreated={onBatchCreated} onSaveBrand={onSaveBrand} path={generatePath} />}
             {screen === "processing"   && processingBatch && <BatchProcessor batch={processingBatch} brands={brands} onUpdate={onBatchUpdate} />}
             {screen === "batches"      && <Batches batches={batches} onOpen={openBatch} onNav={setScreen} />}
             {screen === "brands"       && <BrandsScreen brands={brands} onSave={onSaveBrand} />}

@@ -64,6 +64,12 @@ export async function fetchRecentBatches(limit = 50) {
   return data || [];
 }
 
+export async function fetchBatch(id) {
+  const { data, error } = await supabase.from(TABLES.batches).select("*").eq("id", id).single();
+  if (error) throw error;
+  return data;
+}
+
 export async function createBatch(row) {
   const { data, error } = await supabase.from(TABLES.batches).insert(row).select().single();
   if (error) throw error;
