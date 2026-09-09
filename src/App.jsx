@@ -1,5 +1,6 @@
 
 import { useState, useEffect, useRef, createContext, useContext } from "react";
+import { appConfig } from "./lib/config";
 import {
   BUCKETS,
   fetchBrands, saveBrand,
@@ -19,7 +20,9 @@ const LIGHT = {
   cardBorder: "#E0E0E0",
   text:       "#202020",
   textMuted:  "#666666",
-  textLight:  "#BABABA",
+  // 4.5:1 sobre card/cream — #BABABA (el valor de marca original) quedaba en
+  // ~2.3:1 y las etiquetas "opcional" y textos de ayuda eran ilegibles.
+  textLight:  "#767676",
   accent:     "#963058",
   accentDark: "#FFFFFF",
   teal:       "#60BFB8",
@@ -46,7 +49,8 @@ const DARK = {
   cardBorder: "#3A3A3A",
   text:       "#FFFFFF",
   textMuted:  "#BABABA",
-  textLight:  "#5A5A5A",
+  // #5A5A5A daba ~1.5:1 sobre los fondos oscuros — texto fantasma.
+  textLight:  "#9A9A9A",
   accent:     "#963058",
   accentDark: "#FFFFFF",
   teal:       "#60BFB8",
@@ -161,95 +165,109 @@ const globalCSS = `
 `;
 
 // ─── API HELPERS ────────────────────────────────────────────────────
-// Everything goes through the org's LiteLLM proxy — VITE_LITELLM_API_KEY_GPT
-// is a LiteLLM virtual key (not a raw OpenAI key), so it only ever
-// authenticates against that proxy's own base URL, never api.openai.com
-// directly. No fallback to a direct-OpenAI path — single source of truth.
-function getOpenAIKey() { return window.__OPENAI_KEY__ || import.meta.env.VITE_LITELLM_API_KEY_GPT || ""; }
-function hasApiKey()    { return !!getOpenAIKey(); }
+// Todas las llamadas LLM van por el proxy del propio server (/api/llm/chat),
+// que añade la LITELLM_API_KEY de su entorno — ninguna credencial viaja en el
+// bundle (mismo esquema que course-cover-engine). appConfig llega en runtime
+// desde /api/config.
+function hasApiKey() { return !!appConfig.hasLlmKey; }
 
-function getOpenAIBase() {
-  const base = window.__LITELLM_BASE_GPT__ || import.meta.env.VITE_LITELLM_BASE_URL_GPT || "";
-  if (!base) throw new Error("Falta VITE_LITELLM_BASE_URL_GPT en Coolify — la URL del proxy LiteLLM.");
-  return base.replace(/\/$/, "");
+// Reintentos con backoff exponencial (portado de course-cover-engine): 429/quota
+// espera ~60s, 500/503/overloaded backoff 2s→4s→8s con jitter. Los errores de
+// billing NO se reintentan — fallan al instante para no colgar el lote un minuto
+// por intento en un error que no se va a arreglar solo.
+async function withRetry(fn, { maxAttempts = 4, baseDelay = 2000, label = "", onRetry = null } = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = e.message || "";
+      const httpStatus = parseInt((msg.match(/(?:LiteLLM|HTTP) (\d+)/) || [])[1]) || 0;
+      const isBillingError = /billing account has exceeded|billing.*exceeded|exceeded.*billing/i.test(msg);
+      const is429 = !isBillingError && (httpStatus === 429 || /RESOURCE_EXHAUSTED|quota.*exceeded|rate.limit.*exceeded/i.test(msg));
+      const isRetryable = is429 || httpStatus === 503 || httpStatus === 500 || /UNAVAILABLE|overloaded/i.test(msg);
+      if (!isRetryable || attempt === maxAttempts) throw e;
+      const delay = is429 ? 60000 + Math.random() * 5000 : baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      console.warn(`[retry ${attempt}/${maxAttempts}] ${label} — esperando ${Math.round(delay / 1000)}s…`, msg.slice(0, 80));
+      if (onRetry) onRetry(attempt, delay);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
 }
 
-async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = "gpt-4o") {
-  const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
-  const res = await fetch(`${getOpenAIBase()}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user",   content: userMessage },
-      ],
-    }),
+async function callLLMChat(body) {
+  return withRetry(async () => {
+    const res = await fetch("/api/llm/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
+    }
+    return res.json();
+  }, { label: body.model });
+}
+
+// ─── MODEL SELECTION ────────────────────────────────────────────────
+// Text model is user-selectable (dropdown in the TopBar), persisted in
+// localStorage so it survives reloads. Image model is fixed. LiteLLM routes
+// both by name — no per-provider keys or URLs needed here.
+const TEXT_MODELS = [
+  { id: "gemini-2.5-flash",      label: "Gemini 2.5 Flash - Recomendado (mejor calidad/tokens)" },
+  { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite - Más rápido y económico (menor calidad)" },
+  { id: "gemini-2.5-pro",        label: "Gemini 2.5 Pro - Máxima calidad (5-10x más caro)" },
+  { id: "gemini-2.0-flash",      label: "Gemini 2.0 Flash - Generación anterior" },
+];
+const DEFAULT_TEXT_MODEL = "gemini-2.5-flash";
+const TEXT_MODEL_STORAGE_KEY = "adbatch_text_model";
+const IMAGE_MODEL = "gemini-3-pro-image";
+const IMG_DELAY_MS = 2000;
+
+function getTextModel() {
+  try {
+    const stored = localStorage.getItem(TEXT_MODEL_STORAGE_KEY);
+    if (TEXT_MODELS.some(m => m.id === stored)) return stored;
+  } catch { /* localStorage unavailable (SSR/privacy mode) — use default */ }
+  return DEFAULT_TEXT_MODEL;
+}
+function setTextModel(id) {
+  try { localStorage.setItem(TEXT_MODEL_STORAGE_KEY, id); } catch { /* ignore */ }
+}
+
+async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = getTextModel()) {
+  const data = await callLLMChat({
+    model,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user",   content: userMessage },
+    ],
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
-  }
-  const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
 }
 
-async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000, model = "gpt-4o") {
-  const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
-  const res = await fetch(`${getOpenAIBase()}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user",   content: contentBlocks },
-      ],
-    }),
+async function callOpenAIVision(systemPrompt, contentBlocks, maxTokens = 1000, model = getTextModel()) {
+  const data = await callLLMChat({
+    model,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user",   content: contentBlocks },
+    ],
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
-  }
-  const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
 }
 
-// Chat Completions' image_url content only accepts actual image MIME types —
-// PDFs need OpenAI's separate Responses API (input_file content part).
-async function callOpenAIResponsesPDF(systemPrompt, pdfBase64Array, userText, maxTokens = 2000, model = "gpt-4o") {
-  const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
-  const fileBlocks = pdfBase64Array.map((b64, i) => ({
-    type: "input_file",
-    filename: `brand_doc_${i + 1}.pdf`,
-    file_data: `data:application/pdf;base64,${b64}`,
+// PDFs viajan como data URLs inline por chat/completions — LiteLLM los convierte
+// a inline_data de Gemini (mismo mecanismo que usa course-cover-engine para
+// adjuntos). El bridge /v1/responses no cubre modelos gemini en nuestro proxy.
+async function callOpenAIResponsesPDF(systemPrompt, pdfBase64Array, userText, maxTokens = 2000, model = getTextModel()) {
+  const fileBlocks = pdfBase64Array.map(b64 => ({
+    type: "image_url",
+    image_url: { url: `data:application/pdf;base64,${b64}` },
   }));
-  const res = await fetch(`${getOpenAIBase()}/v1/responses`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      max_output_tokens: maxTokens,
-      input: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: [...fileBlocks, { type: "input_text", text: userText }] },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "request failed"}`);
-  }
-  const data = await res.json();
-  if (data.output_text) return data.output_text;
-  const textPart = data.output?.flatMap(o => o.content || []).find(c => c.type === "output_text");
-  return textPart?.text || "";
+  return callOpenAIVision(systemPrompt, [...fileBlocks, { type: "text", text: userText }], maxTokens, model);
 }
 
 async function analyzeBrandPDF(pdfBase64Array, existingBrandName = "") {
@@ -404,30 +422,42 @@ async function analyzeReferenceCreative(imageDataUrl) {
 }
 
 // ─── IMAGE GENERATION ────────────────────────────────────────────────
-// gpt-image-1 only accepts these three sizes (plus "auto") — no arbitrary dims.
+// `api` is an aspect-ratio hint embedded in the prompt (gemini image models via
+// LiteLLM chat/completions take no size param — same approach as
+// course-cover-engine). compositeAd stretches to the exact w×h afterwards.
 const FORMAT_SIZES = {
-  story:     { w: 1080, h: 1920, api: "1024x1536" },
-  feed_4x5:  { w: 1080, h: 1350, api: "1024x1536" },
-  square:    { w: 1080, h: 1080, api: "1024x1024" },
-  landscape: { w: 1200, h: 628,  api: "1536x1024" },
+  story:     { w: 1080, h: 1920, api: "9:16" },
+  feed_4x5:  { w: 1080, h: 1350, api: "4:5" },
+  square:    { w: 1080, h: 1080, api: "1:1" },
+  landscape: { w: 1200, h: 628,  api: "16:9" },
+};
+
+const AR_HINTS = {
+  "1:1":  "square 1:1 aspect ratio",
+  "9:16": "vertical 9:16 portrait aspect ratio",
+  "4:5":  "vertical 4:5 portrait aspect ratio",
+  "16:9": "horizontal 16:9 landscape aspect ratio",
+  "3:2":  "3:2 landscape aspect ratio",
+  "2:3":  "2:3 portrait aspect ratio",
 };
 
 function customDimToSize(dim) {
   const m = String(dim || "").match(/(\d+)[×x](\d+)/i);
-  if (!m) return { w: 1080, h: 1080, api: "1024x1024" };
+  if (!m) return { w: 1080, h: 1080, api: "1:1" };
   const w = parseInt(m[1]), h = parseInt(m[2]);
   const ratio = w / h;
-  if (ratio > 1.3) return { w, h, api: "1536x1024" };
-  if (ratio < 0.8) return { w, h, api: "1024x1536" };
-  return { w, h, api: "1024x1024" };
+  if (ratio > 1.3) return { w, h, api: "3:2" };
+  if (ratio < 0.8) return { w, h, api: "2:3" };
+  return { w, h, api: "1:1" };
 }
 
 // Image cost is driven purely by generateImage() calls, not by format count
 // or variantCount — every format is compositeAd'd from the SAME generated
 // image, and variantCount only repeats the (much cheaper) copy/text call.
 // So: pilot flow = 5 (candidates) + 1 per remaining course; otherwise 1 per
-// course. pricePerImage is a rough gpt-image-1 ballpark, not a live quote.
-function estimateBatchCost(courseCount, usePilotFlowEstimate, pricePerImage = 0.04) {
+// course. pricePerImage is a rough per-image ballpark for gemini-3-pro-image
+// (mismo valor que usa course-cover-engine), not a live quote.
+function estimateBatchCost(courseCount, usePilotFlowEstimate, pricePerImage = 0.134) {
   const imagesEstimate = usePilotFlowEstimate ? 5 + Math.max(0, courseCount - 1) : courseCount;
   return { imagesEstimate, costEstimate: imagesEstimate * pricePerImage };
 }
@@ -469,34 +499,21 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
   return (await callOpenAI(system, user, 280)).trim();
 }
 
-async function generateImage(prompt, apiSize) {
-  const key = getOpenAIKey();
-  if (!key) throw new Error("Sin OpenAI key. Configura VITE_LITELLM_API_KEY_GPT en Coolify (o window.__OPENAI_KEY__ en consola).");
-  // No response_format: some accounts (gpt-image-1) reject the param entirely and
-  // always return b64_json; others (dall-e-3) default to a url. Handle both.
-  const res = await fetch(`${getOpenAIBase()}/v1/images/generations`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size: apiSize }),
+async function generateImage(prompt, aspectRatio) {
+  // Gemini image models via LiteLLM go through chat/completions with the image
+  // modality — /v1/images/generations no las soporta. max_tokens tiene que ser
+  // enorme o el PNG base64 llega truncado (sin chunk IEND).
+  const arHint = AR_HINTS[aspectRatio] || `${aspectRatio} aspect ratio`;
+  const data = await callLLMChat({
+    model: IMAGE_MODEL,
+    messages: [{ role: "user", content: `${prompt}\n\nRender the image with ${arHint}.` }],
+    modalities: ["image", "text"],
+    max_tokens: 32768,
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI ${res.status}: ${err.error?.message || "image generation failed"}`);
-  }
-  const data = await res.json();
-  const result = data.data?.[0];
-  if (!result) return null;
-  if (result.b64_json) return result.b64_json;
-  if (result.url) {
-    const imgRes = await fetch(result.url);
-    const blob = await imgRes.blob();
-    return new Promise(resolve => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result.replace(/^data:image\/\w+;base64,/, ""));
-      reader.readAsDataURL(blob);
-    });
-  }
-  return null;
+  // LiteLLM devuelve la imagen inline en choices[0].message.images[] como data URL.
+  const imageUrl = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+  if (!imageUrl || !imageUrl.startsWith("data:")) return null;
+  return (imageUrl.split(",")[1] || "").replace(/[\r\n\s]/g, "");
 }
 
 async function loadFontFace(name, src) {
@@ -787,7 +804,7 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
   const sidebarBg = isLight ? "#FFFFFF" : "#1A1A1A";
   const divider = isLight ? `1px solid #E0E0E0` : `1px solid rgba(255,255,255,0.08)`;
   const activeItemBg = isLight ? "rgba(32,32,32,0.06)" : "rgba(255,255,255,0.07)";
-  const footerTextColor = isLight ? "rgba(32,32,32,0.25)" : "rgba(255,255,255,0.25)";
+  const footerTextColor = isLight ? "rgba(32,32,32,0.55)" : "rgba(255,255,255,0.55)";
   return (
     <aside className={`app-sidebar${isOpen ? " sidebar-open" : ""}`} style={{ background: sidebarBg, display: "flex", flexDirection: "column", minHeight: "100vh", borderRight: divider }}>
       <div className="gradient-line" />
@@ -841,6 +858,123 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
 }
 
 // ─── TOP BAR ────────────────────────────────────────────────────────
+// Chip para nombres de columnas/variables dentro de texto de ayuda — borde y
+// color propios para que no se funda con el fondo (el <code> desnudo heredaba
+// el gris del párrafo y el chip blanco desaparecía sobre la página blanca).
+function CodeChip({ children }) {
+  const T = useTheme();
+  return (
+    <code style={{ background: T.card, border: `1px solid ${T.cardBorder}`, color: T.text, padding: "1px 6px", borderRadius: 4, fontSize: 12, whiteSpace: "nowrap" }}>
+      {children}
+    </code>
+  );
+}
+
+// Selector Rápido/Batch para las imágenes (mismo patrón de course-cover-engine:
+// dos botones lado a lado, persistido en localStorage). "Batch" envía todas las
+// imágenes del lote a la Google Batch API con la GEMINI_API_KEY del server —
+// 50% más barato, asíncrono (normalmente 15min–2h). Solo disponible si el
+// server tiene la key (appConfig.hasBatchKey).
+const IMG_MODE_STORAGE_KEY = "adbatch_img_mode";
+
+function getImgMode() {
+  try {
+    const m = localStorage.getItem(IMG_MODE_STORAGE_KEY);
+    return m === "batch" ? "batch" : "rapid";
+  } catch { return "rapid"; }
+}
+
+// Lee la respuesta NDJSON en streaming de /api/batch/results, invocando onItem
+// por cada imagen a medida que llega (el payload completo puede ser enorme).
+async function readBatchResults(name, onItem) {
+  const res = await fetch(`/api/batch/results?name=${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`Batch results HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", summary = null, done = false;
+  while (!done) {
+    const { value, done: d } = await reader.read();
+    done = d;
+    buf += decoder.decode(value || new Uint8Array(), { stream: !d });
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) continue;
+      const obj = JSON.parse(t);
+      if (obj.__error) throw new Error(obj.__error);
+      if (obj.__done) { summary = obj; continue; }
+      await onItem(obj);
+    }
+  }
+  return summary;
+}
+
+function ImageModeSelect() {
+  const T = useTheme();
+  const [mode, setMode] = useState(() => (appConfig.hasBatchKey ? getImgMode() : "rapid"));
+  const pick = id => {
+    setMode(id);
+    try { localStorage.setItem(IMG_MODE_STORAGE_KEY, id); } catch { /* ignore */ }
+  };
+  const modes = [
+    { id: "rapid", label: "Rápido", detail: "Síncrono vía LiteLLM · ves cada imagen al generarse", hint: "Genera las imágenes una a una, en tiempo real." },
+    appConfig.hasBatchKey
+      ? { id: "batch", label: "Batch · 50% más barato", detail: "Asíncrono vía Google Batch API · normalmente 15min–2h", hint: "Envía todas las imágenes del lote de golpe. Mantén la pestaña abierta hasta que termine." }
+      : { id: "batch", label: "Batch · no disponible", detail: "Requiere GEMINI_API_KEY en el server", hint: "Configura GEMINI_API_KEY (Google AI Studio) en el entorno del server para activarlo.", disabled: true },
+  ];
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Modo de generación de imágenes</label>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {modes.map(o => {
+          const active = mode === o.id;
+          return (
+            <button key={o.id} onClick={() => !o.disabled && pick(o.id)} disabled={o.disabled} title={o.hint}
+              style={{
+                padding: "10px 14px", borderRadius: 10, textAlign: "left",
+                border: `1px solid ${active ? T.text : T.cardBorder}`,
+                background: active ? T.cream : "transparent",
+                cursor: o.disabled ? "not-allowed" : "pointer", opacity: o.disabled ? 0.6 : 1,
+                display: "flex", flexDirection: "column", gap: 3, transition: "all 0.15s",
+              }}>
+              <span style={{ fontSize: 13, fontWeight: active ? 700 : 500, color: T.text }}>{o.label}</span>
+              <span style={{ fontSize: 10, color: T.textMuted }}>{o.detail}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Selector del modelo de texto — vive en el paso de confirmación del wizard,
+// pero la elección (localStorage) aplica globalmente vía getTextModel(): también
+// a la extracción de PDFs y al análisis de referencias en Marcas.
+function TextModelSelect() {
+  const T = useTheme();
+  const [model, setModel] = useState(getTextModel());
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Modelo de texto</label>
+      <select
+        value={model}
+        onChange={e => { setModel(e.target.value); setTextModel(e.target.value); }}
+        style={{
+          width: "100%", fontSize: 13, color: T.text, background: T.card,
+          border: `1px solid ${T.cardBorder}`, borderRadius: 10,
+          padding: "10px 12px", cursor: "pointer",
+        }}
+      >
+        {TEXT_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+      </select>
+      <div style={{ fontSize: 11, color: T.textLight, marginTop: 6 }}>
+        Se usa para investigar los cursos, generar los copys y los prompts de imagen.
+      </div>
+    </div>
+  );
+}
+
 function TopBar({ title, creditsLeft, onNewBatch, onMenuToggle }) {
   const T = useTheme();
   return (
@@ -897,7 +1031,7 @@ function Dashboard({ batches, onNewBatch, onNav }) {
           <h1 style={{ fontSize: 36, fontWeight: 700, lineHeight: 1.1, color: T.white, marginBottom: 10, fontFamily: '"Rubik","Calibri",sans-serif' }}>
             Buenos días.
           </h1>
-          <p style={{ fontSize: 14, color: "rgba(255,255,255,0.78)" }}>
+          <p style={{ fontSize: 14, color: "rgba(255,255,255,0.92)" }}>
             {batches.filter(b => b.status === "generating").length || 0} lotes procesando.
           </p>
         </div>
@@ -1313,7 +1447,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
             <button key={f.id} onClick={() => toggle("formats", f.id)} style={{ padding: 12, border: `1.5px solid ${sel ? T.text : T.cardBorder}`, borderRadius: 12, background: sel ? T.text : T.card, textAlign: "left", transition: "all 0.15s" }}>
               <div style={{ width: w, height: h, border: `1.5px solid ${sel ? T.cream : T.cardBorder}`, borderRadius: 3, marginBottom: 8, opacity: sel ? 0.6 : 1 }} />
               <div style={{ fontSize: 11, fontWeight: 600, color: sel ? T.cream : T.text, marginBottom: 2 }}>{f.label}</div>
-              <div style={{ fontSize: 10, color: sel ? "#888" : T.textMuted }}>{f.dim}</div>
+              <div style={{ fontSize: 10, color: sel ? T.cream : T.textMuted, opacity: sel ? 0.8 : 1 }}>{f.dim}</div>
             </button>
           );
         })}
@@ -1498,7 +1632,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
             {cfg.audience.filter(a => !AUDIENCES.includes(a)).map(a => (
               <button key={a} onClick={() => toggle("audience", a)} style={{ padding: "7px 14px", borderRadius: 999, border: `1.5px solid ${T.accent}`, background: T.accent, color: T.accentDark, fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
-                {a} <span style={{ opacity: 0.6, fontSize: 14 }}>×</span>
+                {a} <span style={{ opacity: 0.9, fontSize: 14 }}>×</span>
               </button>
             ))}
           </div>
@@ -1523,7 +1657,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
             {cfg.painPoints.filter(p => !PAINS.includes(p)).map(p => (
               <button key={p} onClick={() => toggle("painPoints", p)} style={{ padding: "7px 14px", borderRadius: 999, border: `1.5px solid ${T.accent}`, background: T.accent, color: T.accentDark, fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
-                {p} <span style={{ opacity: 0.6, fontSize: 14 }}>×</span>
+                {p} <span style={{ opacity: 0.9, fontSize: 14 }}>×</span>
               </button>
             ))}
           </div>
@@ -1561,7 +1695,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
             {cfg.ctas.filter(c => !ALL_CTAS.includes(c) && !suggestedCTAs.includes(c)).map(c => (
               <button key={c} onClick={() => toggle("ctas", c)} style={{ padding: "7px 14px", borderRadius: 999, border: `1.5px solid ${T.accent}`, background: T.accent, color: T.accentDark, fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
-                {c} <span style={{ opacity: 0.6, fontSize: 14 }}>×</span>
+                {c} <span style={{ opacity: 0.9, fontSize: 14 }}>×</span>
               </button>
             ))}
           </div>
@@ -1586,9 +1720,11 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   const stepCourses = (
     <div key="courses" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Cargar cursos</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>
-        Mínimo <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>course_name</code> / <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>url</code>.
-        Formato Euroinnova también soportado: <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>Título;Keywords Curso;Precio;Page URL</code> (delimitado por <code style={{ background: T.card, padding: "1px 6px", borderRadius: 4, fontSize: 12 }}>;</code>) — se toman las 5 primeras keywords de cada curso y se usan en el diseño piloto. La IA hace el resto.
+      <p style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.8, marginBottom: 6 }}>
+        Sube un CSV o Excel con al menos las columnas <CodeChip>course_name</CodeChip> y <CodeChip>url</CodeChip> — la IA hace el resto.
+      </p>
+      <p style={{ fontSize: 12, color: T.textMuted, lineHeight: 1.8, marginBottom: 28 }}>
+        También se acepta el formato Euroinnova <CodeChip>Título;Keywords Curso;Precio;Page URL</CodeChip> (delimitado por <CodeChip>;</CodeChip>): de cada curso se toman las 5 primeras keywords para el diseño piloto.
       </p>
 
       <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.ods" onChange={handleFile} style={{ display: "none" }} />
@@ -1750,7 +1886,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
 
       {!hasApiKey() && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY_GPT</code> en Coolify (o <code>window.__OPENAI_KEY__</code> en consola) antes de lanzar si quieres imágenes.
+          <strong>Aviso:</strong> sin LiteLLM key configurada — el lote generará solo copy, sin imágenes ni diseño piloto. Configura <CodeChip>LITELLM_API_KEY</CodeChip> en el entorno del server (Coolify) antes de lanzar si quieres imágenes.
         </div>
       )}
 
@@ -1777,10 +1913,13 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         ))}
       </div>
 
+      <TextModelSelect />
+      <ImageModeSelect />
+
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
-          <div style={{ fontSize: 11, color: "#888" }}>La IA investigará cada URL y generará copy + prompts de imagen</div>
+          <div style={{ fontSize: 11, color: T.white, opacity: 0.75 }}>La IA investigará cada URL y generará copy + prompts de imagen</div>
         </div>
         <button onClick={() => setShowCostConfirm(true)} disabled={launching} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap", opacity: launching ? 0.7 : 1, cursor: launching ? "wait" : "pointer" }}>
           {launching ? "Analizando referencias…" : "✦ Lanzar lote"}
@@ -1816,7 +1955,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       <StepIndicator step={step} total={steps.length} />
       {steps[step]}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36 }}>
-        <button onClick={() => setStep(s => Math.max(0, s - 1))} style={{ background: "transparent", color: step === 0 ? T.textLight : T.textMuted, fontSize: 13, padding: "8px 0", opacity: step === 0 ? 0.3 : 1 }} disabled={step === 0}>← Atrás</button>
+        <button onClick={() => setStep(s => Math.max(0, s - 1))} style={{ background: "transparent", color: step === 0 ? T.textLight : T.textMuted, fontSize: 13, padding: "8px 0", opacity: step === 0 ? 0.55 : 1 }} disabled={step === 0}>← Atrás</button>
         {step < steps.length - 1 && <button onClick={() => setStep(s => s + 1)} disabled={!canProceed} style={{ background: canProceed ? T.text : T.cardBorder, color: canProceed ? T.cream : T.textMuted, fontSize: 13, fontWeight: 600, padding: "9px 24px", borderRadius: 999, transition: "all 0.15s", cursor: canProceed ? "pointer" : "not-allowed" }}>Continuar →</button>}
       </div>
     </div>
@@ -1829,6 +1968,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const [items, setItems] = useState([]);
   const [phase, setPhase] = useState("researching");
   const [progress, setProgress] = useState(0);
+  // Progreso del job en Google Batch API: { done, total, submittedAt }
+  const [batchWait, setBatchWait] = useState(null);
   const [ctrl, setCtrl] = useState("running"); // "running"|"paused"|"cancelled"|"done"|"error"
   const [runKey, setRunKey] = useState(0);
   const [pilotDirections, setPilotDirections] = useState([]);
@@ -1939,10 +2080,11 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     if (!dbBatchIdRef.current || !dataUrl) return;
     try {
       const path = `${dbBatchIdRef.current}/${courseIndex}-${fmtKey}-${crypto.randomUUID()}.png`;
-      await uploadFile(BUCKETS.creatives, path, dataUrl);
+      // El server recomprime a WebP y devuelve la ruta final (.webp).
+      const storedPath = await uploadFile(BUCKETS.creatives, path, dataUrl);
       await insertCreative({
         batch_id: dbBatchIdRef.current,
-        image_path: path,
+        image_path: storedPath,
         width: fmtMeta?.w || null,
         height: fmtMeta?.h || null,
         format_label: fmtKey,
@@ -2033,7 +2175,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       ...selectedFormats.map(fid => ({ key: fid, ...(FORMAT_SIZES[fid] || { w: 1080, h: 1080, api: "1024x1024" }) })),
       ...(customDim ? [{ key: customDim, ...customDimToSize(customDim) }] : []),
     ];
-    const primaryApiSize = formatList[0]?.api || "1024x1024";
+    const primaryApiSize = formatList[0]?.api || "1:1";
 
     await persistBatchStart();
     const resume = resumeStateRef.current; // set only when reopening an interrupted batch
@@ -2138,6 +2280,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         }
         setPilotCandidates([...candidates]);
         setProgress(25 + Math.round((candidates.length / directions.length) * 20));
+        if (candidates.length < directions.length) await new Promise(r => setTimeout(r, IMG_DELAY_MS));
       }
       if (isCancelledRef.current) return;
 
@@ -2195,8 +2338,133 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     await waitIfPaused();
     if (isCancelledRef.current) return;
 
-    // Image generation (requires an OpenAI key)
-    if (hasApiKey()) {
+    // Composita todos los formatos de un curso y lo persiste — compartido por
+    // los modos Rápido y Batch.
+    async function compositeAndPersist(i, item, firstCopy, imagePrompt, imageB64) {
+      const composited = {};
+      const qaIssues = {};
+      for (const fmt of formatList) {
+        const result = await compositeAd(imageB64, firstCopy, brand, fmt.w, fmt.h);
+        composited[fmt.key] = result.dataUrl;
+        qaIssues[fmt.key] = result.qaIssues;
+        setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging", composited: { ...composited } } : it));
+        persistCreative(i, item, firstCopy, imagePrompt, fmt.key, fmt, composited[fmt.key]);
+      }
+      researched[i] = { ...item, status: "imaged", imagePrompt, composited, qaIssues };
+      persistBatchProgress(i);
+    }
+
+    // Espera troceada para poder abortar el polling del batch con Cancelar.
+    async function sleepUnlessCancelled(ms) {
+      const end = Date.now() + ms;
+      while (Date.now() < end && !isCancelledRef.current) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+
+    // Image generation (requires a LiteLLM key)
+    if (hasApiKey() && getImgMode() === "batch" && appConfig.hasBatchKey) {
+      // ── Modo Batch: Google Batch API (50% más barato, asíncrono) ─────────
+      setPhase("imaging");
+      const jobs = [];
+      for (let i = pilotStartIdx; i < researched.length; i++) {
+        if (isCancelledRef.current) return;
+        const item = researched[i];
+        if (item.status === "researchFailed" || item.status === "copyFailed" || item.status === "imaged") continue;
+        const firstCopy = Array.isArray(item.copies) ? item.copies[0] : {};
+        try {
+          const imagePrompt = winningDirection
+            ? buildStyleVariantPrompt(winningDirection, brand, item, item.keywords5)
+            : await generateImagePrompt(brand, item, item.research || {}, firstCopy);
+          jobs.push({ courseIndex: i, item, firstCopy, imagePrompt });
+          setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging" } : it));
+        } catch (err) {
+          researched[i] = { ...item, status: "imageFailed", imageError: err.message };
+          setItems(prev => prev.map((it, idx) => idx === i ? researched[i] : it));
+        }
+      }
+
+      if (jobs.length) {
+        setPhase("batch-wait");
+        setBatchWait({ done: 0, total: jobs.length, submittedAt: Date.now() });
+        // Chunks de ≤100 (límite de la Batch API para requests inline).
+        const chunks = [];
+        for (let o = 0; o < jobs.length; o += 100) chunks.push(jobs.slice(o, o + 100));
+        try {
+          const submitted = [];
+          for (const chunk of chunks) {
+            const res = await fetch("/api/batch/submit", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                displayName: batch.name || "adbatch",
+                items: chunk.map(j => ({ id: String(j.courseIndex), prompt: j.imagePrompt, aspectRatio: primaryApiSize })),
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data?.error || `Batch submit HTTP ${res.status}`);
+            submitted.push({ name: data.name, chunk });
+          }
+
+          let doneImages = 0;
+          for (const job of submitted) {
+            // Poll cada 30s hasta que el job termine.
+            let state = "JOB_STATE_PENDING";
+            while (!isCancelledRef.current) {
+              const res = await fetch(`/api/batch/status?name=${encodeURIComponent(job.name)}`);
+              const st = await res.json().catch(() => ({}));
+              if (res.ok) {
+                state = st.state;
+                setBatchWait({ done: doneImages + (st.completedCount || 0), total: jobs.length, submittedAt: Date.now() });
+                if (["JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"].includes(state)) break;
+              }
+              await sleepUnlessCancelled(30000);
+            }
+            if (isCancelledRef.current) return;
+
+            if (state !== "JOB_STATE_SUCCEEDED") {
+              for (const j of job.chunk) {
+                researched[j.courseIndex] = { ...j.item, status: "imageFailed", imageError: `Batch ${state}` };
+                setItems(prev => prev.map((it, idx) => idx === j.courseIndex ? researched[j.courseIndex] : it));
+              }
+              continue;
+            }
+
+            // Resultados en streaming: compositar cada imagen según llega.
+            const byIndex = new Map(job.chunk.map(j => [String(j.courseIndex), j]));
+            await readBatchResults(job.name, async ({ key, data, error }) => {
+              const j = byIndex.get(String(key));
+              if (!j) return;
+              await waitIfPaused();
+              if (isCancelledRef.current) return;
+              if (error || !data) {
+                researched[j.courseIndex] = { ...j.item, status: "imageFailed", imageError: error || "Sin imagen en el batch" };
+              } else {
+                try {
+                  await compositeAndPersist(j.courseIndex, j.item, j.firstCopy, j.imagePrompt, data);
+                } catch (err) {
+                  researched[j.courseIndex] = { ...j.item, status: "imageFailed", imageError: err.message };
+                }
+              }
+              doneImages++;
+              setBatchWait({ done: doneImages, total: jobs.length, submittedAt: Date.now() });
+              setItems(prev => prev.map((it, idx) => idx === j.courseIndex ? researched[j.courseIndex] : it));
+              setProgress(70 + Math.round((doneImages / jobs.length) * 30));
+            });
+          }
+        } catch (err) {
+          // Fallo global del batch (submit/poll/results): marca lo pendiente.
+          for (const j of jobs) {
+            if (researched[j.courseIndex].status !== "imaged" && researched[j.courseIndex].status !== "imageFailed") {
+              researched[j.courseIndex] = { ...j.item, status: "imageFailed", imageError: err.message };
+              setItems(prev => prev.map((it, idx) => idx === j.courseIndex ? researched[j.courseIndex] : it));
+            }
+          }
+        }
+        setBatchWait(null);
+      }
+    } else if (hasApiKey()) {
+      // ── Modo Rápido: síncrono vía LiteLLM, una a una ─────────────────────
       setPhase("imaging");
       for (let i = pilotStartIdx; i < researched.length; i++) {
         await waitIfPaused();
@@ -2216,22 +2484,15 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           if (isCancelledRef.current) return;
           const imageB64 = await generateImage(imagePrompt, primaryApiSize);
           if (isCancelledRef.current) return;
-          const composited = {};
-          const qaIssues = {};
-          for (const fmt of formatList) {
-            const result = await compositeAd(imageB64, firstCopy, brand, fmt.w, fmt.h);
-            composited[fmt.key] = result.dataUrl;
-            qaIssues[fmt.key] = result.qaIssues;
-            setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging", composited: { ...composited } } : it));
-            persistCreative(i, item, firstCopy, imagePrompt, fmt.key, fmt, composited[fmt.key]);
-          }
-          researched[i] = { ...item, status: "imaged", imagePrompt, composited, qaIssues };
-          persistBatchProgress(i);
+          await compositeAndPersist(i, item, firstCopy, imagePrompt, imageB64);
         } catch (err) {
           researched[i] = { ...item, status: "imageFailed", imageError: err.message };
         }
         setItems(prev => prev.map((it, idx) => idx === i ? researched[i] : it));
         setProgress(70 + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 30));
+        // Respiro entre imágenes (course-cover-engine usa el mismo valor) para
+        // no provocar 429 en el proxy con lotes grandes.
+        if (i < researched.length - 1) await new Promise(r => setTimeout(r, IMG_DELAY_MS));
       }
     }
 
@@ -2253,7 +2514,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const missingApiKey = !hasApiKey();
   const total = batch.config.courses?.length || 0;
   const barColor = ctrl === "error" ? T.coral : ctrl === "cancelled" ? T.coral : ctrl === "paused" ? T.textMuted : phase === "done" ? T.teal : T.text;
-  const phaseLabel = ctrl === "error" ? "Error" : ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "pilot-copy" ? "Generando copy piloto..." : phase === "pilot-brainstorm" ? "Diseñando 5 direcciones de estilo..." : phase === "pilot-imaging" ? "Generando 5 diseños piloto..." : phase === "pilot-review" ? "Esperando aprobación de diseño" : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : "Completado";
+  const phaseLabel = ctrl === "error" ? "Error" : ctrl === "cancelled" ? "Cancelado" : ctrl === "paused" ? "En pausa" : phase === "researching" ? "Investigando cursos..." : phase === "pilot-copy" ? "Generando copy piloto..." : phase === "pilot-brainstorm" ? "Diseñando 5 direcciones de estilo..." : phase === "pilot-imaging" ? "Generando 5 diseños piloto..." : phase === "pilot-review" ? "Esperando aprobación de diseño" : phase === "generating" ? "Generando copy..." : phase === "imaging" ? "Generando imágenes..." : phase === "batch-wait" ? `Batch en Google — ${batchWait ? `${batchWait.done}/${batchWait.total} imágenes` : "enviando"} · normalmente 15min–2h, mantén la pestaña abierta` : "Completado";
 
   return (
     <div className="fade-in content-area" style={{ flex: 1 }}>
@@ -2300,7 +2561,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       )}
       {missingApiKey && ctrl !== "error" && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
-          <strong>Aviso:</strong> sin OpenAI key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <code>VITE_LITELLM_API_KEY_GPT</code> en Coolify y repite el lote.
+          <strong>Aviso:</strong> sin LiteLLM key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <CodeChip>LITELLM_API_KEY</CodeChip> en el entorno del server (Coolify) y repite el lote.
         </div>
       )}
 
@@ -2389,7 +2650,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           );
         })}
         {Array.from({ length: Math.max(0, total - items.length) }, (_, i) => (
-          <div key={`q${i}`} style={{ display: "flex", alignItems: "center", padding: "11px 18px", borderBottom: `1px solid ${T.cardBorder}`, gap: 12, opacity: 0.4 }}>
+          <div key={`q${i}`} style={{ display: "flex", alignItems: "center", padding: "11px 18px", borderBottom: `1px solid ${T.cardBorder}`, gap: 12, opacity: 0.65 }}>
             <div style={{ width: 16, height: 16, borderRadius: "50%", background: T.cardBorder, flexShrink: 0 }} />
             <span style={{ fontSize: 12, color: T.textMuted }}>{batch.config.courses?.[items.length + i]?.name || "..."}</span>
             <span style={{ fontSize: 10, color: T.textMuted }}>En cola</span>
@@ -2465,7 +2726,7 @@ function TagList({ items, onRemove, onAdd, placeholder, color }) {
         {items.map((it, i) => (
           <span key={i} style={{ background: bg, color: text, border: `1px solid ${T.cardBorder}`, fontSize: 11, fontWeight: 500, padding: "3px 10px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 5 }}>
             {it}
-            <button onClick={() => onRemove(i)} style={{ background: "transparent", color: text, fontSize: 12, lineHeight: 1, opacity: 0.5 }}>×</button>
+            <button onClick={() => onRemove(i)} style={{ background: "transparent", color: text, fontSize: 12, lineHeight: 1, opacity: 0.85 }}>×</button>
           </span>
         ))}
       </div>

@@ -1,22 +1,20 @@
+# Las keys ya NO se inyectan en build: server.js las lee del entorno en runtime
+# (mismo esquema que course-cover-engine). Configurarlas en Coolify como
+# variables de runtime: LITELLM_API_KEY, LITELLM_BASE_URL, SUPABASE_URL,
+# SUPABASE_ANON_KEY.
 FROM node:22-alpine AS build
 WORKDIR /app
-
-ARG VITE_LITELLM_API_KEY_GPT
-ARG VITE_LITELLM_BASE_URL_GPT
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-ENV VITE_LITELLM_API_KEY_GPT=$VITE_LITELLM_API_KEY_GPT
-ENV VITE_LITELLM_BASE_URL_GPT=$VITE_LITELLM_BASE_URL_GPT
-ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
-ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
-
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY server.js ./
+COPY --from=build /app/dist ./dist
+EXPOSE 3000
+CMD ["node", "server.js"]
