@@ -7,14 +7,19 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "node --env-file-if-exists=.env --env-file-if-exists=.env.local server.js",
+    "start": "node server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",
+    "express": "^5.2.1",
     "jszip": "^3.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "read-excel-file": "^9.2.0"
+    "read-excel-file": "^9.2.0",
+    "sharp": "^0.35.4",
+    "stream-json": "^1.9.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

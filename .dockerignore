@@ -11,3 +11,5 @@ yarn-error.log*
 .vscode
 .idea
 *.log
+# Material de diseño — no participa en el build
+EDUCA EDTECH Group Design System

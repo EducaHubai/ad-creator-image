@@ -12,6 +12,7 @@ Estructura de datos y storage para AdBatch en Supabase self-hosted.
 4. Pega y click en **Run**.
 5. Verifica en **Table Editor** que aparezcan las 5 tablas y las 3 vistas.
 6. Repite los pasos 3-4 con `migrations/0002_persist_brands_and_batches.sql` (agrega columnas que faltaban en `brands`/`batches`/`creatives`, alinea `formats` con los slugs reales de la app, y crea los buckets `creatives` + `brand-assets`).
+7. Repite con `migrations/0003_enable_rls.sql` (activa RLS — requiere que la app ya use el server con `SUPABASE_SERVICE_KEY`, ver abajo).
 
 ### Opcion B: psql (si te gusta la terminal)
 
@@ -52,7 +53,7 @@ Estructura de rutas:
 ```
 creatives/
   {batch_id}/
-    {creative_id}.png
+    {courseIndex}-{formato}-{uuid}.webp   (el server recomprime los PNG a WebP q85)
 
 brand-assets/
   {brand_slug}/
@@ -65,21 +66,11 @@ brand-assets/
 
 La tabla `creatives` ya tiene columna `expires_at` que se rellena automaticamente a 30 dias vista al insertar.
 
-**Job de limpieza:** se implementara en n8n con schedule diario a las 04:00. Query base:
-
-```sql
--- Lista imagenes expiradas que aun tienen path (no purgadas)
-select id, image_path
-from public.creatives
-where expires_at < now()
-  and image_path is not null
-limit 1000;
-```
-
-El job:
-1. Lista los `image_path` expirados.
-2. Los borra del bucket `creatives` via Storage API.
-3. Actualiza `image_path = null` en la tabla (mantiene metadata).
+**Job de limpieza:** lo hace `pg_cron` dentro del propio Postgres (migracion
+`0003_enable_rls.sql`, mismo patron que course-cover-engine): la funcion
+`cleanup_expired_creatives()` corre a diario a las 04:00 UTC, borra del bucket
+`creatives` los ficheros expirados y pone `image_path = null` en la fila
+(la metadata se conserva). No hace falta n8n.
 
 De momento la retencion es 30 dias. Ajustable cambiando el default en la tabla:
 
@@ -90,10 +81,9 @@ alter table public.creatives
 
 ## RLS (Row Level Security)
 
-Desactivada por defecto en esta migration. Se activara cuando anadamos auth de usuario.
-
-**Nota:** `ad-creator-image` es una SPA sin backend propio (Coolify solo sirve el build estatico via nginx), asi que a diferencia de lo planeado originalmente aca arriba (`service_role key` solo desde servidor), la app usa la **anon key** desde el cliente para leer y escribir estas tablas — igual que ya hacia para leer los stats del dashboard. Con RLS desactivada, cualquiera que llegue al bundle publicado tiene en teoria lectura/escritura completa via esa key. Aceptable mientras la herramienta sea de uso interno; revisar cuando se agregue Supabase Auth.
-
-## Proxima migration
-
-`0003_auth_and_rls.sql` (pendiente): activara RLS y anadira policies por rol cuando integremos Supabase Auth.
+Activada en `0003_enable_rls.sql`. Desde 2026-09-08 la app tiene backend propio
+(`server.js`) que habla con Supabase usando la **service key** — el navegador ya
+no recibe ninguna credencial de Supabase. Con RLS activa y sin políticas para
+`anon`, la anon key antigua queda inservible: nadie puede leer ni escribir con
+ella. El `service_role` salta RLS por diseño (y además tiene política explícita,
+mismo patrón que course-cover-engine).
