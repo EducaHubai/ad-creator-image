@@ -563,6 +563,27 @@ function loadImage(src) {
   });
 }
 
+// Luminancia media (0-255) de los píxeles NO transparentes de una imagen —
+// se usa para saber si un logo es claro u oscuro y detectar cuándo se funde
+// con el fondo. null si no se puede medir (canvas contaminado por CORS).
+function imageMeanLuminance(img) {
+  try {
+    const s = 48;
+    const c = document.createElement("canvas");
+    c.width = s; c.height = s;
+    const cx = c.getContext("2d");
+    cx.drawImage(img, 0, 0, s, s);
+    const { data } = cx.getImageData(0, 0, s, s);
+    let sum = 0, n = 0;
+    for (let p = 0; p < data.length; p += 4) {
+      if (data[p + 3] < 40) continue;
+      sum += 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+      n++;
+    }
+    return n ? sum / n : null;
+  } catch { return null; }
+}
+
 async function compositeAd(imageB64, copy, brandConfig, width, height) {
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
@@ -586,11 +607,8 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
     ctx.fillStyle = colors.primary || "#202020"; ctx.fillRect(0, 0, width, height);
   }
 
-  // Bottom gradient
-  const grad = ctx.createLinearGradient(0, height * 0.33, 0, height);
-  grad.addColorStop(0, "rgba(0,0,0,0)");
-  grad.addColorStop(1, "rgba(0,0,0,0.85)");
-  ctx.fillStyle = grad; ctx.fillRect(0, 0, width, height);
+  // (El degradado inferior se pinta más abajo, una vez calculado dónde
+  // arranca el bloque de texto — su altura ahora es dinámica.)
 
   // Fonts — try to load brand .ttf from backend URL or data URI
   let displayFontName = "BrandDisplay_" + (brandConfig.id || "x");
@@ -622,49 +640,92 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   const pad = Math.round(width * 0.07);
   ctx.textBaseline = "top";
 
-  function wrapText(text, x, startY, maxW, lineH, maxLines) {
-    const words = String(text || "").split(" ");
-    let line = "", y = startY, count = 0;
+  // Parte el texto en líneas por ancho. Nunca recorta: el ajuste se hace
+  // bajando el cuerpo de letra en fitLines.
+  function computeLines(text, maxW) {
+    const words = String(text || "").split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = "";
     for (const word of words) {
       const test = line ? `${line} ${word}` : word;
-      if (ctx.measureText(test).width > maxW && line) {
-        if (count >= maxLines - 1) { ctx.fillText(line + "…", x, y); return y + lineH; }
-        ctx.fillText(line, x, y); line = word; y += lineH; count++;
-      } else { line = test; }
+      if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = word; }
+      else line = test;
     }
-    if (line) ctx.fillText(line, x, y);
-    return y + lineH;
+    if (line) lines.push(line);
+    return lines;
   }
+
+  // Los títulos de curso largos salían cortados con "…" — ahora se reduce el
+  // cuerpo de letra hasta que el texto completo cabe en maxLines (con un
+  // mínimo legible; si aun así excede, se pintan todas las líneas y el bloque
+  // entero se desplaza hacia arriba más abajo).
+  function fitLines(text, maxW, baseSize, minSize, maxLines, mkFont) {
+    let size = baseSize;
+    ctx.font = mkFont(size);
+    let lines = computeLines(text, maxW);
+    while (lines.length > maxLines && size > minSize) {
+      size = Math.max(minSize, size - Math.max(1, Math.round(size * 0.08)));
+      ctx.font = mkFont(size);
+      lines = computeLines(text, maxW);
+    }
+    return { size, lines };
+  }
+
+  const maxTextW = width - pad * 2;
+  const hl = fitLines(copy.headline, maxTextW, Math.round(height * 0.052), Math.round(height * 0.032), 3, s => `bold ${s}px ${displayFont}`);
+  const bd = fitLines(copy.body,     maxTextW, Math.round(height * 0.027), Math.round(height * 0.02),  3, s => `${s}px ${bodyFontFam}`);
+
+  const hlLineH = hl.size * 1.25;
+  const bdLineH = bd.size * 1.45;
+  const hlH = hl.lines.length * hlLineH;
+  const bdBlockH = bd.lines.length ? hl.size * 0.5 + bd.lines.length * bdLineH : 0;
+  const ctaSize = Math.round(height * 0.03);
+  const ctaPadX = ctaSize * 1.2, ctaPadY = ctaSize * 0.65;
+  const ctaBoxH = ctaSize + ctaPadY * 2;
+  const ctaStr = copy.cta || "";
+  const ctaBlockH = ctaStr ? ctaSize * 1.2 + ctaBoxH : 0;
+
+  // El bloque arranca en 0.58h como antes, pero sube lo que haga falta para
+  // que headline + body + CTA quepan enteros sobre el margen inferior.
+  const hlStartY = Math.max(height * 0.34, Math.min(height * 0.58, height - pad - (hlH + bdBlockH + ctaBlockH)));
+
+  // Bottom gradient — arranca siempre por encima del texto para que siga
+  // siendo legible aunque el bloque haya subido.
+  const gradTop = Math.min(height * 0.33, hlStartY - hl.size * 1.5);
+  const grad = ctx.createLinearGradient(0, gradTop, 0, height);
+  grad.addColorStop(0, "rgba(0,0,0,0)");
+  grad.addColorStop(1, "rgba(0,0,0,0.85)");
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, width, height);
 
   // Headline
   ctx.shadowColor = "rgba(0,0,0,0.65)"; ctx.shadowBlur = 12;
-  const hlSize = Math.round(height * 0.052);
-  ctx.font = `bold ${hlSize}px ${displayFont}`; ctx.fillStyle = textOverlay;
-  const hlStartY = height * 0.58;
-  const hlEndY = wrapText(copy.headline, pad, hlStartY, width - pad * 2, hlSize * 1.25, 3);
+  ctx.font = `bold ${hl.size}px ${displayFont}`; ctx.fillStyle = textOverlay;
+  let textY = hlStartY;
+  for (const line of hl.lines) { ctx.fillText(line, pad, textY); textY += hlLineH; }
+  const hlEndY = textY;
 
   // Body
-  const bdSize = Math.round(height * 0.027);
-  ctx.font = `${bdSize}px ${bodyFontFam}`; ctx.fillStyle = `${textOverlay}dd`; ctx.shadowBlur = 6;
-  const bdStartY = hlEndY + hlSize * 0.5;
-  const bdEndY = wrapText(copy.body, pad, bdStartY, width - pad * 2, bdSize * 1.45, 3);
+  ctx.font = `${bd.size}px ${bodyFontFam}`; ctx.fillStyle = `${textOverlay}dd`; ctx.shadowBlur = 6;
+  const bdStartY = hlEndY + hl.size * 0.5;
+  textY = bdStartY;
+  for (const line of bd.lines) { ctx.fillText(line, pad, textY); textY += bdLineH; }
+  const bdEndY = textY;
 
   // CTA pill
   ctx.shadowBlur = 0;
-  const ctaSize = Math.round(height * 0.03);
   ctx.font = `bold ${ctaSize}px ${bodyFontFam}`;
-  const ctaStr = copy.cta || "";
   const ctaTextW = ctx.measureText(ctaStr).width;
-  const ctaPadX = ctaSize * 1.2, ctaPadY = ctaSize * 0.65;
-  const ctaBoxW = ctaTextW + ctaPadX * 2, ctaBoxH = ctaSize + ctaPadY * 2;
+  const ctaBoxW = ctaTextW + ctaPadX * 2;
   const ctaBoxY = Math.min(bdEndY + ctaSize * 1.2, height - ctaBoxH - pad);
-  ctx.fillStyle = ctaBgColor;
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(pad, ctaBoxY, ctaBoxW, ctaBoxH, ctaBoxH / 2);
-  else ctx.rect(pad, ctaBoxY, ctaBoxW, ctaBoxH);
-  ctx.fill();
-  ctx.fillStyle = ctaFgColor;
-  ctx.fillText(ctaStr, pad + ctaPadX, ctaBoxY + ctaPadY);
+  if (ctaStr) {
+    ctx.fillStyle = ctaBgColor;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(pad, ctaBoxY, ctaBoxW, ctaBoxH, ctaBoxH / 2);
+    else ctx.rect(pad, ctaBoxY, ctaBoxW, ctaBoxH);
+    ctx.fill();
+    ctx.fillStyle = ctaFgColor;
+    ctx.fillText(ctaStr, pad + ctaPadX, ctaBoxY + ctaPadY);
+  }
 
   // Logo overlay — pick white/dark version by sampling mean luminance under the
   // logo's bbox (spec: L = 0.299R + 0.587G + 0.114B, white logo if L < 140).
@@ -677,27 +738,50 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
     const refLogoImg = await loadImage(refLogoSrc);
     if (refLogoImg) {
       const lh = Math.round(height * 0.042);
-      const lw = Math.round(refLogoImg.naturalWidth * lh / Math.max(refLogoImg.naturalHeight, 1));
       const margin = Math.round(width * 0.055);
       const placement = brandConfig.adRules?.logoPlacement || "bottom-right";
-      const lx = placement.includes("right") ? width - lw - margin : margin;
-      const ly = placement.includes("top")   ? margin : height - lh - margin;
+      const refLw = Math.round(refLogoImg.naturalWidth * lh / Math.max(refLogoImg.naturalHeight, 1));
+      const ly = placement.includes("top") ? margin : height - lh - margin;
 
-      let chosenSrc = logoWhiteSrc || logoDarkSrc;
-      if (logoWhiteSrc && logoDarkSrc) {
-        const sx = Math.max(0, Math.min(Math.round(lx), width - 1));
-        const sy = Math.max(0, Math.min(Math.round(ly), height - 1));
-        const sw = Math.max(1, Math.min(Math.round(lw), width - sx));
-        const sh = Math.max(1, Math.min(Math.round(lh), height - sy));
+      // Luminancia del fondo bajo el bbox del logo — se mide SIEMPRE (antes
+      // solo con dos versiones de logo), porque también decide la placa de
+      // contraste de abajo.
+      const sx = Math.max(0, Math.min(Math.round(placement.includes("right") ? width - refLw - margin : margin), width - 1));
+      const sy = Math.max(0, Math.min(Math.round(ly), height - 1));
+      const sw = Math.max(1, Math.min(Math.round(refLw), width - sx));
+      const sh = Math.max(1, Math.min(Math.round(lh), height - sy));
+      let bgLuminance = 128;
+      try {
         const { data } = ctx.getImageData(sx, sy, sw, sh);
         let sum = 0;
         for (let p = 0; p < data.length; p += 4) sum += 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
-        const meanLuminance = sum / (data.length / 4);
-        chosenSrc = meanLuminance < 140 ? logoWhiteSrc : logoDarkSrc;
-      }
+        bgLuminance = sum / (data.length / 4);
+      } catch { /* canvas contaminado (imagen cross-origin) — asumir fondo medio */ }
+
+      let chosenSrc = refLogoSrc;
+      if (logoWhiteSrc && logoDarkSrc) chosenSrc = bgLuminance < 140 ? logoWhiteSrc : logoDarkSrc;
 
       const logoImg = chosenSrc === refLogoSrc ? refLogoImg : await loadImage(chosenSrc);
-      if (logoImg) { ctx.globalAlpha = 0.92; ctx.drawImage(logoImg, lx, ly, lw, lh); ctx.globalAlpha = 1; }
+      if (logoImg) {
+        // Medidas con el logo elegido (blanco y oscuro pueden tener proporciones distintas).
+        const lw = Math.round(logoImg.naturalWidth * lh / Math.max(logoImg.naturalHeight, 1));
+        const lx = placement.includes("right") ? width - lw - margin : margin;
+
+        // Placa de contraste: si el logo se funde con el fondo (p. ej. solo
+        // hay logo oscuro y el fondo también es oscuro), se pinta detrás una
+        // pastilla del tono opuesto al logo para que siempre sea visible.
+        const logoLuminance = imageMeanLuminance(logoImg) ?? (chosenSrc === logoWhiteSrc ? 255 : 40);
+        if (Math.abs(logoLuminance - bgLuminance) < 60) {
+          const platePad = lh * 0.32;
+          ctx.fillStyle = logoLuminance < 128 ? "rgba(255,255,255,0.92)" : "rgba(20,20,20,0.6)";
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(lx - platePad, ly - platePad, lw + platePad * 2, lh + platePad * 2, platePad);
+          else ctx.rect(lx - platePad, ly - platePad, lw + platePad * 2, lh + platePad * 2);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 0.92; ctx.drawImage(logoImg, lx, ly, lw, lh); ctx.globalAlpha = 1;
+      }
     }
   }
 
