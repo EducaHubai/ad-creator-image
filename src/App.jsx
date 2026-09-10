@@ -1360,6 +1360,11 @@ const FORMATS = [
 ];
 const EUROINNOVA_IMAGE_RULES = `No incluir texto ni logotipos en la imagen. Paleta: granate #B0263E, negro #202020, blanco. Sin degradados, sin formas orgánicas, bloques de color planos, bordes geométricos nítidos. Modelos de 20-40 años, ropa neutra, poses desenfadadas. Dejar la esquina superior izquierda (15% alto, 25% ancho) completamente limpia y de color plano, sin objetos — se reservará para superponer el logo.`;
 
+// Las marcas por defecto llevan ids locales ("b1".."b4") hasta que su fila en
+// Supabase existe; batches.brand_id es uuid, así que un id local colaría un
+// valor inválido y tumbaría el insert entero del lote.
+const isUuid = v => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const DEFAULT_BRANDS = [
   { id: "b1", slug: "structuralia", name: "Structuralia", tone: "Authoritative and precise", personality: "Technical, trustworthy", language: "es", headlineRules: "Start with action verb, max 8 words", bodyRules: "2-3 sentences, lead with transformation", forbiddenWords: "revolutionary, amazing, world-class" },
   { id: "b2", slug: "educahub-ai", name: "EducaHub.ai",  tone: "Warm and aspirational",     personality: "Innovative, approachable", language: "es", headlineRules: "Focus on outcome, conversational, max 10 words", bodyRules: "Lead with benefit, mention flexibility", forbiddenWords: "guaranteed, best, incredible" },
@@ -2208,6 +2213,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const [pilotCandidates, setPilotCandidates] = useState([]);
   const [pilotSelected, setPilotSelected] = useState(null);
   const [pipelineError, setPipelineError] = useState("");
+  // Mensaje del fallo de createBatch al arrancar: si el lote no tiene fila en
+  // la base, nada de este run sobrevive a un reload — el usuario debe saberlo.
+  const [persistWarning, setPersistWarning] = useState("");
   const [lightbox, setLightbox] = useState(null); // { images, index } | null
   const brand = brands.find(b => b.id === batch.config.brandId) || brands[0] || DEFAULT_BRANDS[0];
   const isPausedRef   = useRef(false);
@@ -2270,14 +2278,16 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       const row = await createBatch({
         name: batch.name || null,
         status: "processing",
-        brand_id: brand?.id || null,
+        brand_id: isUuid(brand?.id) ? brand.id : null,
         config: batch.config || {},
         courses: batch.config.courses || [],
         started_at: new Date().toISOString(),
       });
       dbBatchIdRef.current = row.id;
+      setPersistWarning("");
     } catch (err) {
       console.warn("[supabase] No se pudo crear el lote en la base:", err.message);
+      setPersistWarning(err.message);
     }
   }
 
@@ -2806,6 +2816,11 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       {missingApiKey && ctrl !== "error" && (
         <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
           <strong>Aviso:</strong> sin LiteLLM key configurada — este lote generará solo copy, sin imágenes ni diseño piloto. Configura <CodeChip>LITELLM_API_KEY</CodeChip> en el entorno del server (Coolify) y repite el lote.
+        </div>
+      )}
+      {persistWarning && ctrl !== "error" && (
+        <div style={{ padding: "12px 16px", background: "#FFF6E0", border: "1px solid #E0B84D", borderRadius: 10, marginBottom: 20, fontSize: 12, color: "#8A6300", lineHeight: 1.5 }}>
+          <strong>Aviso:</strong> este lote no se pudo guardar en Supabase y desaparecerá al recargar la página. Detalle: <CodeChip>{persistWarning}</CodeChip>. Revisa <CodeChip>/api/supabase-ping</CodeChip> en el server.
         </div>
       )}
 
@@ -3779,8 +3794,15 @@ export default function App() {
       const merged = await Promise.all(DEFAULT_BRANDS.map(async def => {
         const row = bySlug.get(def.slug);
         if (row) { bySlug.delete(def.slug); return rowToBrand(row); }
-        saveBrand(brandToRow(def)).catch(err => console.warn("[supabase] No se pudo sembrar marca:", def.slug, err.message));
-        return def;
+        // Sembrar y adoptar el id (uuid) de la fila creada: si la marca se
+        // queda con su id local ("b2"...), el brand_id del lote sería inválido.
+        try {
+          const saved = await saveBrand(brandToRow(def));
+          return { ...def, id: saved.id, slug: saved.slug };
+        } catch (err) {
+          console.warn("[supabase] No se pudo sembrar marca:", def.slug, err.message);
+          return def;
+        }
       }));
       const extra = await Promise.all([...bySlug.values()].map(rowToBrand));
       setBrands([...merged, ...extra]);

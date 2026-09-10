@@ -104,7 +104,7 @@ app.get("/api/supabase-ping", async (_req, res) => {
   // Inventario real: tablas expuestas por PostgREST (raíz OpenAPI) y buckets de
   // Storage — para detectar de un vistazo desajustes de nombres como el del
   // prefijo ad_creator_.
-  const inventory = { tablePrefix: TABLE_PREFIX, tables: null, buckets: null };
+  const inventory = { tablePrefix: TABLE_PREFIX, tables: null, columns: null, buckets: null };
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/`, {
       signal: AbortSignal.timeout(3000),
@@ -112,6 +112,13 @@ app.get("/api/supabase-ping", async (_req, res) => {
     });
     const spec = await r.json();
     inventory.tables = Object.keys(spec?.paths || {}).filter(p => p !== "/").map(p => p.slice(1)).sort();
+    // Columnas reales de las tablas de esta app: detecta esquemas desalineados
+    // con las migraciones del repo (que siguen sin prefijo) sin acceso a psql.
+    const defs = spec?.definitions || {};
+    inventory.columns = Object.fromEntries(["brands", "batches", "creatives"].map(t => [
+      table(t),
+      defs[table(t)] ? Object.keys(defs[table(t)].properties || {}).sort() : "tabla no expuesta",
+    ]));
   } catch (e) {
     inventory.tables = `error: ${e.message.slice(0, 80)}`;
   }
@@ -123,7 +130,29 @@ app.get("/api/supabase-ping", async (_req, res) => {
       inventory.buckets = `error: ${e.message.slice(0, 80)}`;
     }
   }
-  res.json({ ...results, inventory });
+  // Write-probe: los lotes "desaparecen" cuando el insert inicial revienta y
+  // el front solo hace console.warn — esto reproduce ese insert (con las
+  // mismas columnas que usa createBatch) y devuelve el error exacto.
+  let writeProbe = null;
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from(table("batches"))
+        .insert({ name: "__supabase-ping__", status: "pending", brand_id: null, config: {}, courses: [], started_at: new Date().toISOString() })
+        .select("id")
+        .single();
+      if (error) {
+        writeProbe = { ok: false, error: error.message };
+      } else {
+        await supabase.from(table("batches")).delete().eq("id", data.id);
+        writeProbe = { ok: true };
+      }
+    } catch (e) {
+      writeProbe = { ok: false, error: e.message.slice(0, 200) };
+    }
+  }
+
+  res.json({ ...results, inventory, writeProbe });
 });
 
 // ── Gemini Batch API (modo Batch: 50% más barato, asíncrono hasta 24h) ───────
@@ -388,6 +417,27 @@ app.post("/api/db/creatives", (req, res) => {
 
 const ALLOWED_BUCKETS = new Set(["creatives", "brand-assets"]);
 
+// El Supabase compartido no trae los buckets de esta app (el inventory del
+// ping solo mostraba "covers", de course-cover-engine) — sin ellos, cada
+// upload de creatividades/assets falla con "Bucket not found". Se crean al
+// arrancar con la SERVICE key; idempotente.
+async function ensureBuckets() {
+  if (!supabase) return;
+  try {
+    const { data, error } = await supabase.storage.listBuckets();
+    if (error) throw error;
+    const existing = new Set((data || []).map(b => b.name));
+    for (const name of ALLOWED_BUCKETS) {
+      if (existing.has(name)) continue;
+      const { error: createErr } = await supabase.storage.createBucket(name, { public: false });
+      if (createErr) console.warn(`⚠️  No se pudo crear el bucket "${name}":`, createErr.message);
+      else console.log(`Bucket "${name}" creado en Supabase Storage.`);
+    }
+  } catch (err) {
+    console.warn("⚠️  No se pudieron verificar los buckets de Storage:", err.message);
+  }
+}
+
 app.post("/api/storage/upload", async (req, res) => {
   if (!requireDb(res)) return;
   const { bucket, path: filePath, data, mimeHint } = req.body || {};
@@ -447,4 +497,7 @@ app.use((req, res) => {
   res.sendFile(path.join(dist, "index.html"));
 });
 
-app.listen(PORT, () => console.log(`ad-creator-image escuchando en :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`ad-creator-image escuchando en :${PORT}`);
+  ensureBuckets();
+});
