@@ -4,6 +4,7 @@
 // variables son de runtime: rotarlas en Coolify no requiere rebuild.
 //
 // Env: LITELLM_API_KEY, LITELLM_BASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY,
+//      SUPABASE_TABLE_PREFIX (default "ad_creator_" — el Supabase es compartido),
 //      APP_USER + APP_PASSWORD (Basic Auth, opcional pero recomendado), PORT.
 // El Supabase self-hosted (supabase-api.educahub.ai) sirve un certificado que
 // no pasa verificación — sin esto, todos los fetch salientes fallan con
@@ -34,6 +35,11 @@ const APP_PASSWORD = process.env.APP_PASSWORD;
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || "").trim();
 const GEMINI_BATCH_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GEMINI_BATCH_IMAGE_MODEL = "gemini-3-pro-image-preview";
+
+// El Supabase es una instancia compartida entre apps: las tablas de esta app
+// viven con prefijo (ad_creator_brands, ad_creator_batches, ad_creator_creatives).
+const TABLE_PREFIX = (process.env.SUPABASE_TABLE_PREFIX ?? "ad_creator_").trim();
+const table = name => `${TABLE_PREFIX}${name}`;
 
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -73,13 +79,14 @@ app.get("/api/config", (_req, res) => {
 // prueba la URL configurada y los hosts internos típicos de la red de Coolify.
 // Útil porque la URL pública del Supabase self-hosted no siempre enruta.
 app.get("/api/supabase-ping", async (_req, res) => {
+  const probePath = `/rest/v1/${table("brands")}?select=slug&limit=1`;
   const candidates = [
-    `${SUPABASE_URL}/rest/v1/brands?select=slug&limit=1`,
-    "http://kong:8000/rest/v1/brands?select=slug&limit=1",
-    "http://supabase-kong:8000/rest/v1/brands?select=slug&limit=1",
-    "http://supabase_kong:8000/rest/v1/brands?select=slug&limit=1",
-    "http://rest:3001/brands?select=slug&limit=1",
-    "http://supabase-rest:3001/brands?select=slug&limit=1",
+    `${SUPABASE_URL}${probePath}`,
+    `http://kong:8000${probePath}`,
+    `http://supabase-kong:8000${probePath}`,
+    `http://supabase_kong:8000${probePath}`,
+    `http://rest:3001/${table("brands")}?select=slug&limit=1`,
+    `http://supabase-rest:3001/${table("brands")}?select=slug&limit=1`,
   ];
   const results = {};
   for (const url of candidates) {
@@ -93,7 +100,30 @@ app.get("/api/supabase-ping", async (_req, res) => {
       results[url] = { error: e.message.slice(0, 80) };
     }
   }
-  res.json(results);
+
+  // Inventario real: tablas expuestas por PostgREST (raíz OpenAPI) y buckets de
+  // Storage — para detectar de un vistazo desajustes de nombres como el del
+  // prefijo ad_creator_.
+  const inventory = { tablePrefix: TABLE_PREFIX, tables: null, buckets: null };
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+      signal: AbortSignal.timeout(3000),
+      headers: { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}` },
+    });
+    const spec = await r.json();
+    inventory.tables = Object.keys(spec?.paths || {}).filter(p => p !== "/").map(p => p.slice(1)).sort();
+  } catch (e) {
+    inventory.tables = `error: ${e.message.slice(0, 80)}`;
+  }
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.storage.listBuckets();
+      inventory.buckets = error ? `error: ${error.message.slice(0, 80)}` : (data || []).map(b => b.name).sort();
+    } catch (e) {
+      inventory.buckets = `error: ${e.message.slice(0, 80)}`;
+    }
+  }
+  res.json({ ...results, inventory });
 });
 
 // ── Gemini Batch API (modo Batch: 50% más barato, asíncrono hasta 24h) ───────
@@ -316,44 +346,44 @@ async function reply(res, promise) {
 
 app.get("/api/db/brands", (req, res) => {
   if (!requireDb(res)) return;
-  reply(res, supabase.from("brands").select("*").order("created_at"));
+  reply(res, supabase.from(table("brands")).select("*").order("created_at"));
 });
 
 app.post("/api/db/brands", (req, res) => {
   if (!requireDb(res)) return;
-  reply(res, supabase.from("brands").upsert(req.body, { onConflict: "slug" }).select().single());
+  reply(res, supabase.from(table("brands")).upsert(req.body, { onConflict: "slug" }).select().single());
 });
 
 app.get("/api/db/batches", (req, res) => {
   if (!requireDb(res)) return;
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-  reply(res, supabase.from("batches").select("*").order("created_at", { ascending: false }).limit(limit));
+  reply(res, supabase.from(table("batches")).select("*").order("created_at", { ascending: false }).limit(limit));
 });
 
 app.get("/api/db/batches/:id", (req, res) => {
   if (!requireDb(res)) return;
-  reply(res, supabase.from("batches").select("*").eq("id", req.params.id).single());
+  reply(res, supabase.from(table("batches")).select("*").eq("id", req.params.id).single());
 });
 
 app.post("/api/db/batches", (req, res) => {
   if (!requireDb(res)) return;
-  reply(res, supabase.from("batches").insert(req.body).select().single());
+  reply(res, supabase.from(table("batches")).insert(req.body).select().single());
 });
 
 app.patch("/api/db/batches/:id", (req, res) => {
   if (!requireDb(res)) return;
-  reply(res, supabase.from("batches").update(req.body).eq("id", req.params.id).select().single());
+  reply(res, supabase.from(table("batches")).update(req.body).eq("id", req.params.id).select().single());
 });
 
 app.get("/api/db/creatives", (req, res) => {
   if (!requireDb(res)) return;
   if (!req.query.batch_id) return res.status(400).json({ error: "batch_id requerido" });
-  reply(res, supabase.from("creatives").select("*").eq("batch_id", req.query.batch_id));
+  reply(res, supabase.from(table("creatives")).select("*").eq("batch_id", req.query.batch_id));
 });
 
 app.post("/api/db/creatives", (req, res) => {
   if (!requireDb(res)) return;
-  reply(res, supabase.from("creatives").insert(req.body).select().single());
+  reply(res, supabase.from(table("creatives")).insert(req.body).select().single());
 });
 
 const ALLOWED_BUCKETS = new Set(["creatives", "brand-assets"]);
