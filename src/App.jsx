@@ -1501,20 +1501,29 @@ function brandToRow(brand) {
 // Uploads any freshly-picked (base64 `data:` URI) brand assets to Storage,
 // returning a brand object with `.path` set on each. Assets that already
 // have a `.path` (loaded from DB, untouched this session) are left alone.
+// El accept de logos admite .svg y .png — la extensión debe salir del mime
+// real del data URL: un SVG guardado como .png rompe el preview del bucket y
+// cualquier cliente que confíe en la extensión.
+function dataUrlExt(dataUrl) {
+  const m = /^data:image\/(svg\+xml|png|jpeg|webp)/.exec(dataUrl || "");
+  if (!m) return "png";
+  return m[1] === "svg+xml" ? "svg" : m[1] === "jpeg" ? "jpg" : m[1];
+}
+
 async function persistBrandAssets(brand) {
   const slug = brand.slug || slugify(brand.name);
   const next = { ...brand };
 
-  async function uploadIfFresh(asset, filename) {
+  async function uploadIfFresh(asset, basename) {
     if (!asset?.data || asset.path) return asset;
-    const path = `${slug}/${filename}`;
+    const path = `${slug}/${basename}.${dataUrlExt(asset.data)}`;
     await uploadFile(BUCKETS.brandAssets, path, asset.data);
     return { ...asset, path };
   }
 
-  next.logoWhite   = await uploadIfFresh(brand.logoWhite,   "logo-white.png");
-  next.logoDark    = await uploadIfFresh(brand.logoDark,    "logo-dark.png");
-  next.logoPrimary = await uploadIfFresh(brand.logoPrimary, "logo-primary.png");
+  next.logoWhite   = await uploadIfFresh(brand.logoWhite,   "logo-white");
+  next.logoDark    = await uploadIfFresh(brand.logoDark,    "logo-dark");
+  next.logoPrimary = await uploadIfFresh(brand.logoPrimary, "logo-primary");
 
   if (brand.fontData?.displayData?.startsWith("data:") && !brand.fontData?.displayPath) {
     const path = `${slug}/font-display.ttf`;
@@ -1530,7 +1539,7 @@ async function persistBrandAssets(brand) {
   if (brand.refImages?.length) {
     next.refImages = await Promise.all(brand.refImages.map(async (r, i) => {
       if (r.path || !r.data) return r;
-      const path = `${slug}/ref-${i + 1}.png`;
+      const path = `${slug}/ref-${i + 1}.${dataUrlExt(r.data)}`;
       await uploadFile(BUCKETS.brandAssets, path, r.data);
       return { ...r, path };
     }));
@@ -1733,7 +1742,8 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   function handleLogoUpload(e) {
     const file = e.target.files[0]; if (!file || !brand) return;
     const reader = new FileReader();
-    reader.onload = ev => onSaveBrand?.({ ...brand, logoPrimary: { name: file.name, data: ev.target.result } });
+    reader.onload = ev => Promise.resolve(onSaveBrand?.({ ...brand, logoPrimary: { name: file.name, data: ev.target.result } }))
+      .catch(err => console.warn("[supabase] No se pudo guardar el logo:", err.message));
     reader.readAsDataURL(file);
   }
 
@@ -3083,7 +3093,20 @@ function BrandsScreen({ brands, onSave }) {
 
   const f = (key, val) => setForm(p => ({ ...p, [key]: val }));
 
-  function save() { onSave({ ...form }); }
+  // null | "saving" | "saved" | { error }
+  const [saveStatus, setSaveStatus] = useState(null);
+  async function save() {
+    setSaveStatus("saving");
+    try {
+      const saved = await onSave({ ...form });
+      // Al guardar una marca default por primera vez su id local ("b4") pasa
+      // a ser el uuid de la BD — reapuntar la selección para no saltar de marca.
+      if (saved?.id && saved.id !== selectedBrand) setSelectedBrand(saved.id);
+      setSaveStatus("saved");
+    } catch (err) {
+      setSaveStatus({ error: err.message });
+    }
+  }
 
   async function handlePdfUpload(e) {
     const files = Array.from(e.target.files);
@@ -3365,7 +3388,7 @@ function BrandsScreen({ brands, onSave }) {
           <div style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 8, paddingLeft: 2 }}>Marcas</div>
           <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden" }}>
             {brands.map((b, i) => (
-              <button key={b.id} onClick={() => { setSelectedBrand(b.id); setActiveTab("Identidad"); }}
+              <button key={b.id} onClick={() => { setSelectedBrand(b.id); setActiveTab("Identidad"); setSaveStatus(null); }}
                 style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", background: selectedBrand === b.id ? T.text : "transparent", borderBottom: i < brands.length - 1 ? `1px solid ${T.cardBorder}` : "none", textAlign: "left" }}>
                 <div style={{ width: 8, height: 8, borderRadius: "50%", background: b.colors?.primary || (b.id === "b1" ? "#2672ea" : b.id === "b2" ? "#1b883c" : "#7f55e1"), flexShrink: 0 }} />
                 <div>
@@ -3444,9 +3467,18 @@ function BrandsScreen({ brands, onSave }) {
             {tabContent[activeTab]}
           </div>
 
-          <div style={{ marginTop: 28, paddingTop: 20, borderTop: `1px solid ${T.cardBorder}`, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <button onClick={() => setForm(brand || {})} style={{ background: "transparent", color: T.textMuted, fontSize: 12, padding: "8px 16px", border: `1px solid ${T.cardBorder}`, borderRadius: 999 }}>Restablecer</button>
-            <button onClick={save} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 600, padding: "8px 22px", borderRadius: 999 }}>Guardar marca</button>
+          <div style={{ marginTop: 28, paddingTop: 20, borderTop: `1px solid ${T.cardBorder}`, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+            {saveStatus && (
+              <span role="status" style={{ fontSize: 12, marginRight: "auto", color: saveStatus === "saved" ? T.tealText : saveStatus === "saving" ? T.textMuted : T.coral }}>
+                {saveStatus === "saving" ? "Guardando marca y assets…"
+                  : saveStatus === "saved" ? "✓ Marca y assets guardados en Supabase"
+                  : `No se pudo guardar: ${saveStatus.error}`}
+              </span>
+            )}
+            <button onClick={() => { setForm(brand || {}); setSaveStatus(null); }} style={{ background: "transparent", color: T.textMuted, fontSize: 12, padding: "8px 16px", border: `1px solid ${T.cardBorder}`, borderRadius: 999 }}>Restablecer</button>
+            <button onClick={save} disabled={saveStatus === "saving"} style={{ background: T.text, color: T.cream, fontSize: 12, fontWeight: 600, padding: "8px 22px", borderRadius: 999, opacity: saveStatus === "saving" ? 0.6 : 1 }}>
+              {saveStatus === "saving" ? "Guardando…" : "Guardar marca"}
+            </button>
           </div>
         </div>
       </div>
@@ -3867,17 +3899,17 @@ export default function App() {
       setTimeout(() => { setScreen("batches"); setProcessingBatch(null); }, 1200);
     }
   }
-  function onSaveBrand(updated) {
+  // Async y sin catch propio: el llamante (BrandStudio) muestra el estado de
+  // guardado — antes los fallos morían en un console.warn y el usuario no
+  // sabía si la marca se había guardado o no. Devuelve la marca final para
+  // que la selección sobreviva al cambio de id local ("b4") → uuid de la BD.
+  async function onSaveBrand(updated) {
     setBrands(prev => prev.map(b => b.id === updated.id ? updated : b));
-    (async () => {
-      try {
-        const withAssets = await persistBrandAssets(updated);
-        const saved = await saveBrand(brandToRow(withAssets));
-        setBrands(prev => prev.map(b => b.id === updated.id ? { ...withAssets, id: saved.id, slug: saved.slug } : b));
-      } catch (err) {
-        console.warn("[supabase] No se pudo guardar la marca:", err.message);
-      }
-    })();
+    const withAssets = await persistBrandAssets(updated);
+    const saved = await saveBrand(brandToRow(withAssets));
+    const final = { ...withAssets, id: saved.id, slug: saved.slug };
+    setBrands(prev => prev.map(b => b.id === updated.id ? final : b));
+    return final;
   }
   function openBatch(b) {
     // A batch reopened from the DB list mid-generation (reload/closed tab,

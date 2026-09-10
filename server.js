@@ -487,6 +487,11 @@ app.post("/api/storage/upload", async (req, res) => {
   const match = /^data:([^;]+);base64,(.*)$/s.exec(data);
   let mime = match ? match[1] : (mimeHint || "image/png");
   const base64 = match ? match[2] : data;
+  // Sin este guard, cualquier string (p. ej. una URL firmada reenviada por
+  // error) se decodificaría "como base64" y se subiría un archivo corrupto.
+  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(base64.slice(0, 256))) {
+    return res.status(400).json({ error: "data debe ser un data URL base64 o base64 crudo" });
+  }
   try {
     let bytes = Buffer.from(base64, "base64");
     let finalPath = filePath;
