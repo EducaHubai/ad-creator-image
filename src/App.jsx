@@ -419,11 +419,26 @@ function resizeImageFile(file, maxDim = 768, quality = 0.75) {
 }
 
 // ─── BRAND VISUAL ANALYSIS ───────────────────────────────────────────
+// Las imágenes cargadas de la BD llevan .data = URL del proxy de storage
+// (same-origin, tras Basic Auth) — el LLM no puede descargarla. Antes de
+// enviar cualquier imagen al modelo hay que materializarla como data URL.
+async function srcToDataUrl(src) {
+  if (!src || src.startsWith("data:")) return src || null;
+  const blob = await (await fetch(src)).blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error(`No se pudo leer la imagen: ${src}`));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function analyzeRefImages(refImages) {
   if (!refImages?.length) return "";
-  const imageBlocks = refImages.slice(0, 4).map(img => ({
+  const urls = await Promise.all(refImages.slice(0, 4).map(img => srcToDataUrl(img.data || img)));
+  const imageBlocks = urls.filter(Boolean).map(url => ({
     type: "image_url",
-    image_url: { url: img.data || img, detail: "low" },
+    image_url: { url, detail: "low" },
   }));
   const result = await callOpenAIVision(
     "You are a visual brand analyst. Analyze the reference images and return a concise 2-3 sentence visual aesthetic descriptor: color mood, lighting style, composition, photographic feel. Use concrete visual language suitable for image generation prompts. Return only the descriptor text.",
@@ -437,8 +452,9 @@ async function analyzeRefImages(refImages) {
 // STYLE_VARIANTS-style direction.description with no brainstorm step to
 // refine it, so it needs to be detailed and concrete enough to hand straight
 // to an image generation model, not just a mood blurb.
-async function analyzeReferenceCreative(imageDataUrl) {
-  if (!imageDataUrl) return "";
+async function analyzeReferenceCreative(imageSrc) {
+  if (!imageSrc) return "";
+  const imageDataUrl = await srcToDataUrl(imageSrc);
   const result = await callOpenAIVision(
     "You are a visual art director. Analyze this ad creative and describe its background/visual design in enough concrete detail to regenerate an equivalent design for a different course, with different photographic content. Describe: composition and layout zones, color blocks and palette, photographic treatment/style, where empty/reserved space sits (for a logo and text overlay). Do NOT describe or transcribe any text, headline, or logo visible in the image — those get replaced separately. Return ONLY the description, 3-5 sentences, no markdown, no preamble.",
     [
@@ -2249,9 +2265,28 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const dbBatchIdRef = useRef(null);
   const errorMessageRef = useRef(null);
   const imagedCourseIndicesRef = useRef([]);
+  // El diseño ganador solo existe en el config de la BD (no en batch.config en
+  // memoria) — sin este ref, cada checkpoint de progreso lo borraría al
+  // reescribir config y el resume perdería la dirección elegida.
+  const winningDirectionRef = useRef(null);
   // Set only when reopening an interrupted batch (reload/closed tab) — see
   // persistBatchStart. { doneIndices, byCourseIndex, winningDirection }.
   const resumeStateRef = useRef(null);
+
+  // Config sin payloads pesados para la BD: replicateImage/refImages llevan
+  // data URLs de MBs y csvText el CSV entero, y cada checkpoint de progreso
+  // reescribe el jsonb completo. Los descriptores de texto que el pipeline
+  // necesita al retomar (replicateStyleDescriptor, refImageDescriptor,
+  // winningDirection) sí se conservan; courses vive en su columna propia.
+  function persistableConfig(config = {}) {
+    const { replicateImage, refImages, csvText, courses, ...rest } = config;
+    void csvText; void courses;
+    return {
+      ...rest,
+      replicateImage: replicateImage ? { name: replicateImage.name } : null,
+      refImagesCount: refImages?.length || 0,
+    };
+  }
 
   // Best-effort Supabase persistence — must never break the core generation
   // pipeline. Every call here is self-contained: catches its own errors,
@@ -2271,6 +2306,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       try {
         const row = await fetchBatch(batch.dbId);
         dbBatchIdRef.current = row.id;
+        winningDirectionRef.current = row.config?.winningDirection || null;
         const doneIndices = new Set(row.config?.imaged_course_ids || []);
         if (doneIndices.size) {
           imagedCourseIndicesRef.current = [...doneIndices];
@@ -2304,7 +2340,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
         name: batch.name || null,
         status: "processing",
         brand_id: isUuid(brand?.id) ? brand.id : null,
-        config: batch.config || {},
+        config: persistableConfig(batch.config),
         courses: batch.config.courses || [],
         started_at: new Date().toISOString(),
       });
@@ -2330,7 +2366,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   // still resume without re-asking the user to pick a pilot winner again.
   async function persistWinningDirection(direction) {
     if (!dbBatchIdRef.current) return;
-    try { await updateBatch(dbBatchIdRef.current, { config: { ...batch.config, winningDirection: direction } }); }
+    winningDirectionRef.current = direction;
+    try { await updateBatch(dbBatchIdRef.current, { config: { ...persistableConfig(batch.config), winningDirection: direction, imaged_course_ids: imagedCourseIndicesRef.current } }); }
     catch (err) { console.warn("[supabase] No se pudo guardar el diseño elegido:", err.message); }
   }
 
@@ -2338,7 +2375,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     if (!dbBatchIdRef.current) return;
     imagedCourseIndicesRef.current = [...imagedCourseIndicesRef.current, courseIndex];
     try {
-      await updateBatch(dbBatchIdRef.current, { config: { ...batch.config, imaged_course_ids: imagedCourseIndicesRef.current } });
+      await updateBatch(dbBatchIdRef.current, { config: { ...persistableConfig(batch.config), winningDirection: winningDirectionRef.current, imaged_course_ids: imagedCourseIndicesRef.current } });
     } catch (err) {
       console.warn("[supabase] No se pudo guardar el progreso del lote:", err.message);
     }
@@ -3200,7 +3237,9 @@ function BrandsScreen({ brands, onSave }) {
                   {val?.name || (typeof val === "string" && val) || "Sin archivo subido"}
                 </div>
               </div>
-              {val?.data && val.data.startsWith("data:image") && (
+              {/* .data es data URL (recién subido) o URL del proxy de storage
+                  (cargado de la BD) — ambas renderizan en <img>. */}
+              {val?.data && (
                 <ZoomableThumb src={val.data} title={asset.label} style={{ height: 28, maxWidth: 80, objectFit: "contain", margin: "0 12px", background: asset.thumbBg, padding: 4, borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
               )}
               <button onClick={() => aRef.current?.click()} style={{ background: T.text, color: T.cream, fontSize: 11, fontWeight: 500, padding: "5px 12px", borderRadius: 999, flexShrink: 0 }}>Subir</button>
@@ -3887,7 +3926,9 @@ export default function App() {
             status: r.status === "done" ? "review" : r.status === "processing" || r.status === "pending" ? "generating" : r.status,
             createdAt: r.created_at,
             adsCount: r.ads_count || 0,
-            config: r.config || {},
+            // courses vive en su columna propia (config persistido ya no las
+            // duplica); los lotes viejos aún las llevan dentro de config.
+            config: { ...(r.config || {}), courses: r.config?.courses || r.courses || [] },
             items: [],
           }));
           return [...prev, ...fromDb];
