@@ -130,9 +130,9 @@ app.get("/api/supabase-ping", async (_req, res) => {
       inventory.buckets = `error: ${e.message.slice(0, 80)}`;
     }
   }
-  // Write-probe: los lotes "desaparecen" cuando el insert inicial revienta y
-  // el front solo hace console.warn — esto reproduce ese insert (con las
-  // mismas columnas que usa createBatch) y devuelve el error exacto.
+  // Write-probe: los lotes "desaparecen" cuando un insert revienta y el front
+  // solo hace console.warn — esto reproduce los inserts de createBatch e
+  // insertCreative (mismas columnas) y devuelve el error exacto de PostgREST.
   let writeProbe = null;
   if (supabase) {
     try {
@@ -142,10 +142,18 @@ app.get("/api/supabase-ping", async (_req, res) => {
         .select("id")
         .single();
       if (error) {
-        writeProbe = { ok: false, error: error.message };
+        writeProbe = { ok: false, table: table("batches"), error: error.message };
       } else {
+        const { error: creativeErr } = await supabase
+          .from(table("creatives"))
+          .insert({ batch_id: data.id, image_path: null, width: 1080, height: 1080, format_label: "__probe__", params_json: {} })
+          .select("id")
+          .single();
+        // El delete del batch arrastra la creative (FK on delete cascade).
         await supabase.from(table("batches")).delete().eq("id", data.id);
-        writeProbe = { ok: true };
+        writeProbe = creativeErr
+          ? { ok: false, table: table("creatives"), error: creativeErr.message }
+          : { ok: true };
       }
     } catch (e) {
       writeProbe = { ok: false, error: e.message.slice(0, 200) };
