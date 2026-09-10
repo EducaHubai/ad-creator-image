@@ -12,6 +12,24 @@
 -- ejecutar varias veces en el SQL editor de Supabase Studio sin romper nada.
 
 -- ---------------------------------------------------------------------------
+-- brands: campos que brandToRow envía y la tabla real no tiene (0002 §brands)
+-- — sin esto, el upsert de saveBrand falla entero y ni el seeding ni el
+-- Estudio de marca persisten nada
+-- ---------------------------------------------------------------------------
+alter table public.ad_creator_brands
+  add column if not exists tagline           text,
+  add column if not exists website           text,
+  add column if not exists audience          text,
+  add column if not exists logos             jsonb not null default '{}'::jsonb,
+  add column if not exists voice_rules       jsonb not null default '{}'::jsonb,
+  add column if not exists ad_rules          jsonb not null default '{}'::jsonb,
+  add column if not exists ref_images        jsonb not null default '[]'::jsonb,
+  add column if not exists font_data         jsonb not null default '{}'::jsonb,
+  add column if not exists font_server_url   text;
+
+comment on column public.ad_creator_brands.logos is '{"white": "storage path", "dark": "storage path", "primary": "storage path"} — logo_url (columna vieja) queda sin usar, no se borra.';
+
+-- ---------------------------------------------------------------------------
 -- batches: columnas que usa createBatch/updateBatch (0002 §batches)
 -- ---------------------------------------------------------------------------
 alter table public.ad_creator_batches
