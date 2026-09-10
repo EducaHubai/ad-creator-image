@@ -1710,16 +1710,17 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
           const hasCustom = cfg.customDim.trim().length > 0;
           return (
             <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? "#EAF7F6" : T.card, textAlign: "left", transition: "all 0.15s" }}>
-              <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? T.accentDark : T.cardBorder}`, borderRadius: 3, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ fontSize: 9, color: hasCustom ? T.accentDark : T.textMuted, fontWeight: 700 }}>+</span>
+              {/* Colores fijos: el fondo activo (#EAF7F6) es claro en ambos temas. */}
+              <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? "#2A7A73" : T.cardBorder}`, borderRadius: 3, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: 9, color: hasCustom ? "#2A7A73" : T.textMuted, fontWeight: 700 }}>+</span>
               </div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: T.text, marginBottom: 5 }}>Personalizado</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: hasCustom ? "#202020" : T.text, marginBottom: 5 }}>Personalizado</div>
               <input
                 value={cfg.customDim}
                 onChange={e => set("customDim", e.target.value)}
                 placeholder="1200×800"
                 onClick={e => e.stopPropagation()}
-                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${T.cardBorder}`, borderRadius: 5, background: T.cream, fontSize: 10, color: T.text, fontFamily: "monospace" }}
+                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${T.cardBorder}`, borderRadius: 5, background: hasCustom ? "#FFFFFF" : T.cream, fontSize: 10, color: hasCustom ? "#202020" : T.text, fontFamily: "monospace" }}
               />
             </div>
           );
@@ -2045,8 +2046,10 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       </label>
       {(brand?.logoWhite || brand?.logoDark || brand?.logoPrimary) ? (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
-          {(brand.logoWhite || brand.logoDark || brand.logoPrimary)?.data && (
-            <ZoomableThumb src={(brand.logoWhite || brand.logoDark || brand.logoPrimary).data} title={`Logo de ${brand?.name || "la marca"}`} style={{ height: 28, maxWidth: 100, objectFit: "contain", background: T.cream, borderRadius: 4, padding: 4 }} />
+          {/* Preferir las variantes visibles sobre fondo claro; si solo hay
+              logo blanco, previsualizarlo sobre fondo oscuro. */}
+          {(brand.logoDark || brand.logoPrimary || brand.logoWhite)?.data && (
+            <ZoomableThumb src={(brand.logoDark || brand.logoPrimary || brand.logoWhite).data} title={`Logo de ${brand?.name || "la marca"}`} style={{ height: 28, maxWidth: 100, objectFit: "contain", background: (brand.logoDark || brand.logoPrimary) ? "#FFFFFF" : "#202020", borderRadius: 4, padding: 4, border: `1px solid ${T.cardBorder}` }} />
           )}
           <span style={{ fontSize: 12, color: T.tealText }}>✓ Logo cargado — se usa en las creatividades generadas.</span>
           <span style={{ fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>Para más versiones (blanco/oscuro): Estudio de marca → Activos</span>
@@ -3156,10 +3159,12 @@ function BrandsScreen({ brands, onSave }) {
     "Activos": (
       <div>
         <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 16, lineHeight: 1.5 }}>Los logos SVG/PNG se componen sobre cada anuncio vía Canvas. Se almacenan como datos en la config de marca.</div>
+        {/* thumbBg: cada variante se previsualiza sobre el fondo para el que
+            está pensada — un logo blanco sobre la tarjeta clara es invisible. */}
         {[
-          { label: "Logo — blanco (sobre fondos oscuros)", key: "logoWhite",   accept: ".svg,.png" },
-          { label: "Logo — principal",                     key: "logoPrimary", accept: ".svg,.png" },
-          { label: "Logo — oscuro (sobre fondos claros)",  key: "logoDark",    accept: ".svg,.png" },
+          { label: "Logo — blanco (sobre fondos oscuros)", key: "logoWhite",   accept: ".svg,.png", thumbBg: "#202020" },
+          { label: "Logo — principal",                     key: "logoPrimary", accept: ".svg,.png", thumbBg: "#FFFFFF" },
+          { label: "Logo — oscuro (sobre fondos claros)",  key: "logoDark",    accept: ".svg,.png", thumbBg: "#FFFFFF" },
         ].map(asset => {
           const aRef = useRef();
           const val = form[asset.key];
@@ -3168,12 +3173,12 @@ function BrandsScreen({ brands, onSave }) {
             <div key={asset.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", border: `1px solid ${hasFile ? T.accent : T.cardBorder}`, borderRadius: 10, marginBottom: 8, background: T.card }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 2 }}>{asset.label}</div>
-                <div style={{ fontSize: 11, color: hasFile ? T.accentDark : T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div style={{ fontSize: 11, color: hasFile ? T.tealText : T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {val?.name || (typeof val === "string" && val) || "Sin archivo subido"}
                 </div>
               </div>
               {val?.data && val.data.startsWith("data:image") && (
-                <ZoomableThumb src={val.data} title={asset.label} style={{ height: 28, maxWidth: 80, objectFit: "contain", margin: "0 12px" }} />
+                <ZoomableThumb src={val.data} title={asset.label} style={{ height: 28, maxWidth: 80, objectFit: "contain", margin: "0 12px", background: asset.thumbBg, padding: 4, borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
               )}
               <button onClick={() => aRef.current?.click()} style={{ background: T.text, color: T.cream, fontSize: 11, fontWeight: 500, padding: "5px 12px", borderRadius: 999, flexShrink: 0 }}>Subir</button>
               <input ref={aRef} type="file" accept={asset.accept} style={{ display: "none" }} onChange={e => {
@@ -3200,7 +3205,7 @@ function BrandsScreen({ brands, onSave }) {
               <button onClick={() => ref.current?.click()} style={{ background: T.text, color: T.cream, fontSize: 11, fontWeight: 500, padding: "5px 12px", borderRadius: 999, flexShrink: 0 }}>
                 {hasData ? "Reemplazar .ttf" : "Subir .ttf"}
               </button>
-              <span style={{ fontSize: 11, color: hasData ? T.accentDark : T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 11, color: hasData ? T.tealText : T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {fontData[fileKey] || "Sin archivo — usa nombre CSS o URL del backend"}
               </span>
               <input ref={ref} type="file" accept=".ttf,.otf,.woff,.woff2" style={{ display: "none" }} onChange={e => {
