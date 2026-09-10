@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, createContext, useContext } from "react";
 import { appConfig } from "./lib/config";
 import {
   BUCKETS,
-  fetchBrands, saveBrand,
+  fetchBrands, saveBrand, fetchStats,
   fetchRecentBatches, fetchBatch, createBatch, updateBatch,
   fetchCreatives, insertCreative,
   uploadFile, getSignedUrl,
@@ -1242,14 +1242,26 @@ const TIME_SAVED_TOOLTIP =
 
 function Dashboard({ batches, onNewBatch, onNav }) {
   const T = useTheme();
-  // Supabase stats endpoint is currently unreachable (invalid TLS cert on
-  // supabase-api.educahub.ai) — disabled until that's fixed, cards show 0.
-  const totals = {
-    batches_total: 0,
-    creatives_total: 0,
-    formats_total: 0,
+  // Totales desde el server (/api/db/stats). Se refrescan al montar y cada
+  // vez que un lote cambia de estado o suma creatividades, para que generar
+  // un lote se refleje aquí sin recargar la página.
+  const [dbTotals, setDbTotals] = useState(null);
+  const batchesDigest = batches.map(b => `${b.id}:${b.status}:${b.adsCount || 0}`).join("|");
+  useEffect(() => {
+    let alive = true;
+    fetchStats()
+      .then(t => { if (alive) setDbTotals(t); })
+      .catch(err => console.warn("[supabase] No se pudieron cargar los totales del dashboard:", err.message));
+    return () => { alive = false; };
+  }, [batchesDigest]);
+  // Sin Supabase (dev local): computa de los lotes en memoria con la baseline
+  // por defecto de 5 min/creatividad.
+  const totals = dbTotals || {
+    batches_total: batches.length,
+    creatives_total: batches.reduce((a, b) => a + (b.adsCount || 0), 0),
+    formats_total: FORMATS.length,
     brands_total: 0,
-    time_saved_hours: 0,
+    time_saved_hours: Math.round((batches.reduce((a, b) => a + (b.adsCount || 0), 0) * 5 / 60) * 10) / 10,
   };
 
   const stats = [

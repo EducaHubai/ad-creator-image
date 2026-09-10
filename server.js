@@ -404,6 +404,38 @@ app.patch("/api/db/batches/:id", (req, res) => {
   reply(res, supabase.from(table("batches")).update(req.body).eq("id", req.params.id).select().single());
 });
 
+// Totales para las tarjetas del Dashboard. No usa la vista v_stats_totals:
+// esa calcula tiempo ahorrado por creatives.format_id, que la app deja null
+// (los formatos viajan en format_label) — aquí se casa format_label con
+// formats.slug. Se traen los format_label de todas las creatividades (una
+// columna text por fila); si esto crece a decenas de miles habría que moverlo
+// a un RPC con agregación en SQL.
+const STATS_DEFAULT_BASELINE_MIN = 5;
+app.get("/api/db/stats", async (_req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const [batches, brands, formats, creatives] = await Promise.all([
+      supabase.from(table("batches")).select("id", { count: "exact", head: true }),
+      supabase.from(table("brands")).select("id", { count: "exact", head: true }),
+      supabase.from(table("formats")).select("slug,baseline_minutes"),
+      supabase.from(table("creatives")).select("format_label"),
+    ]);
+    const err = batches.error || brands.error || formats.error || creatives.error;
+    if (err) return res.status(500).json({ error: err.message });
+    const baselines = new Map((formats.data || []).map(f => [f.slug, Number(f.baseline_minutes) || STATS_DEFAULT_BASELINE_MIN]));
+    const minutes = (creatives.data || []).reduce((acc, c) => acc + (baselines.get(c.format_label) ?? STATS_DEFAULT_BASELINE_MIN), 0);
+    res.json({
+      batches_total: batches.count || 0,
+      creatives_total: (creatives.data || []).length,
+      formats_total: (formats.data || []).length,
+      brands_total: brands.count || 0,
+      time_saved_hours: Math.round((minutes / 60) * 10) / 10,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/db/creatives", (req, res) => {
   if (!requireDb(res)) return;
   if (!req.query.batch_id) return res.status(400).json({ error: "batch_id requerido" });

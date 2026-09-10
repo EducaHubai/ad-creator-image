@@ -33,6 +33,13 @@ export async function saveBrand(row) {
   return api("/api/db/brands", { method: "POST", body: row });
 }
 
+// ─── STATS ─────────────────────────────────────────────────────────────
+// Totales agregados para el Dashboard (batches/creatives/formats/brands y
+// tiempo ahorrado). Los computa el server contra Supabase.
+export async function fetchStats() {
+  return api("/api/db/stats");
+}
+
 // ─── BATCHES ───────────────────────────────────────────────────────────
 export async function fetchRecentBatches(limit = 50) {
   return (await api(`/api/db/batches?limit=${limit}`)) || [];
