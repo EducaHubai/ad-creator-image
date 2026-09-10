@@ -90,6 +90,14 @@ function IcoMoon({ s = 14 }) {
     </svg>
   );
 }
+function IcoExpand({ s = 14 }) {
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+      <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+    </svg>
+  );
+}
 
 const globalCSS = `
   @import url('https://fonts.googleapis.com/css2?family=Exo+2:wght@400;700&family=Ubuntu:wght@400;700&display=swap');
@@ -110,11 +118,32 @@ const globalCSS = `
   ::-webkit-scrollbar-thumb { background: rgba(150,150,150,0.3); border-radius: 2px; }
   button { cursor: pointer; border: none; outline: none; font-family: inherit; }
   input, textarea, select { font-family: inherit; outline: none; }
+
+  /* ── Hover universal en botones y enlaces ──
+     Velo con el color del propio texto (::after): oscurece ligeramente los
+     botones claros y aclara los oscuros, sin tocar el estilo inline de cada
+     botón. pointer-events:none para que el velo nunca capture clics. */
+  button:not(:disabled) { position: relative; }
+  button:not(:disabled)::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background: currentColor; opacity: 0; transition: opacity 0.15s; pointer-events: none;
+  }
+  button:not(:disabled):hover::after  { opacity: 0.08; }
+  button:not(:disabled):active::after { opacity: 0.14; }
+  a { transition: opacity 0.15s; }
+  a:hover { opacity: 0.75; }
   .fade-in { animation: fadeIn 0.25s cubic-bezier(0.22,1,0.36,1) forwards; }
   @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .gradient-line { height: 3px; width: 100%; background: linear-gradient(90deg, #60BFB8 0%, #2E7ABE 25%, #244A80 50%, #963058 80%, #E96A73 100%); display: block; border: 0; }
+
+  /* ── Sidebar nav hover ──
+     El background activo va inline (gana al :hover), así que el hover solo
+     se nota en items no activos — que es justo lo que queremos. */
+  .side-nav-btn { background: transparent; transition: background 0.15s, color 0.15s; }
+  .side-nav-light:hover { background: rgba(32,32,32,0.05); }
+  .side-nav-dark:hover  { background: rgba(255,255,255,0.06); }
 
   /* ── Main content area ── */
   .dash-body { padding: 36px 40px; flex: 1; }
@@ -788,7 +817,136 @@ function Chip({ status }) {
   );
 }
 
+// ─── LIGHTBOX ───────────────────────────────────────────────────────
+// Visor de imagen a pantalla completa. Escape o clic fuera cierran, ←/→
+// navegan cuando hay varias imágenes, clic sobre la imagen alterna zoom 1:1
+// (con scroll cuando la imagen no cabe). images: [{src, title, subtitle,
+// downloadName}].
+function Lightbox({ images, index, onClose, onNav }) {
+  const [zoomed, setZoomed] = useState(false);
+  // Toda la navegación pasa por aquí para resetear el zoom al cambiar de imagen.
+  const nav = i => { setZoomed(false); onNav(i); };
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight" && images.length > 1) { setZoomed(false); onNav((index + 1) % images.length); }
+      else if (e.key === "ArrowLeft"  && images.length > 1) { setZoomed(false); onNav((index - 1 + images.length) % images.length); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [index, images.length, onClose, onNav]);
+
+  const img = images[index];
+  if (!img) return null;
+
+  const navBtnStyle = side => ({
+    position: "absolute", top: "50%", [side]: 18, transform: "translateY(-50%)",
+    width: 40, height: 40, borderRadius: "50%", background: "rgba(255,255,255,0.12)",
+    color: "#fff", fontSize: 22, lineHeight: 1, display: "flex", alignItems: "center",
+    justifyContent: "center", border: "1px solid rgba(255,255,255,0.25)",
+  });
+
+  return (
+    <div className="fade-in" onClick={onClose} role="dialog" aria-modal="true"
+      style={{ position: "fixed", inset: 0, zIndex: 500, background: "rgba(12,12,12,0.9)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <button onClick={onClose} aria-label="Cerrar"
+        style={{ position: "absolute", top: 16, right: 16, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.12)", color: "#fff", fontSize: 16, border: "1px solid rgba(255,255,255,0.25)" }}>
+        ✕
+      </button>
+      {images.length > 1 && (
+        <>
+          <button aria-label="Anterior" style={navBtnStyle("left")}
+            onClick={e => { e.stopPropagation(); nav((index - 1 + images.length) % images.length); }}>‹</button>
+          <button aria-label="Siguiente" style={navBtnStyle("right")}
+            onClick={e => { e.stopPropagation(); nav((index + 1) % images.length); }}>›</button>
+        </>
+      )}
+      <div onClick={e => e.stopPropagation()}
+        style={{ maxWidth: "88vw", maxHeight: "80vh", overflow: zoomed ? "auto" : "hidden", display: "flex", alignItems: zoomed ? "flex-start" : "center", justifyContent: zoomed ? "flex-start" : "center", borderRadius: 8 }}>
+        <img src={img.src} alt={img.title || "Creatividad"} onClick={() => setZoomed(z => !z)}
+          style={zoomed
+            ? { display: "block", cursor: "zoom-out" }
+            : { display: "block", cursor: "zoom-in", maxWidth: "88vw", maxHeight: "80vh", objectFit: "contain" }} />
+      </div>
+      <div onClick={e => e.stopPropagation()} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 14, maxWidth: "88vw" }}>
+        <div style={{ minWidth: 0 }}>
+          {img.title && <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.title}</div>}
+          {img.subtitle && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.subtitle}</div>}
+        </div>
+        {images.length > 1 && (
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", flexShrink: 0 }}>{index + 1} / {images.length}</span>
+        )}
+        <a href={img.src} download={img.downloadName || "creatividad.png"}
+          style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: "#fff", padding: "5px 14px", border: "1px solid rgba(255,255,255,0.35)", borderRadius: 999, textDecoration: "none", background: "rgba(255,255,255,0.1)" }}>
+          PNG ↓
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// Botón "ampliar" para superponer sobre miniaturas — para el stopPropagation
+// para no disparar la selección/aprobación de la tarjeta que lo contiene.
+function ExpandBtn({ onClick, style }) {
+  return (
+    <button onClick={e => { e.stopPropagation(); onClick(); }} title="Ampliar" aria-label="Ampliar imagen"
+      style={{ position: "absolute", bottom: 8, right: 8, width: 26, height: 26, borderRadius: "50%", background: "rgba(32,32,32,0.72)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 6px rgba(0,0,0,0.25)", ...style }}>
+      <IcoExpand s={13} />
+    </button>
+  );
+}
+
+// Miniatura ampliable: clic abre el visor con esa única imagen.
+function ZoomableThumb({ src, title, style }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <img src={src} alt={title || "Ampliar"} title="Ampliar" onClick={() => setOpen(true)}
+        style={{ cursor: "zoom-in", ...style }} />
+      {open && <Lightbox images={[{ src, title }]} index={0} onClose={() => setOpen(false)} onNav={() => {}} />}
+    </>
+  );
+}
+
+// Tira de miniaturas de referencia con visor integrado (clic amplía y permite
+// navegar entre todas) y botón de añadir. La comparten el asistente de
+// generación y el Estudio de marca.
+function RefImagesStrip({ images, onRemove, onAddClick, canAdd }) {
+  const T = useTheme();
+  const [lbIdx, setLbIdx] = useState(null);
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {images.map((img, i) => (
+          <div key={i} style={{ position: "relative" }}>
+            <img src={img.data} alt={img.name} title="Ampliar" onClick={() => setLbIdx(i)}
+              style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}`, cursor: "zoom-in", display: "block" }} />
+            <button onClick={() => onRemove(i)} aria-label={`Quitar ${img.name}`}
+              style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+          </div>
+        ))}
+        {canAdd && (
+          <button onClick={onAddClick} aria-label="Añadir referencia"
+            style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+        )}
+      </div>
+      {lbIdx !== null && (
+        <Lightbox images={images.map(img => ({ src: img.data, title: img.name }))} index={lbIdx}
+          onClose={() => setLbIdx(null)} onNav={setLbIdx} />
+      )}
+    </>
+  );
+}
+
 // ─── SIDEBAR ────────────────────────────────────────────────────────
+// Pantallas hijas mantienen resaltada su sección padre en el nav (p. ej.
+// entrar al detalle de un lote no debe quitar el foco de "Lotes").
+const SCREEN_PARENT = {
+  "generate-choice": "generate",
+  processing: "batches",
+  "batch-detail": "batches",
+};
+
 function Sidebar({ active, onNav, batches, isOpen, onClose }) {
   const T = useTheme();
   const themeName = useThemeName();
@@ -822,10 +980,11 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
       </div>
       <nav style={{ flex: 1, padding: "12px 0" }}>
         {navItems.map(item => {
-          const isActive = active === item.id || (item.id === "generate" && active === "generate-choice");
+          const isActive = (SCREEN_PARENT[active] || active) === item.id;
           return (
             <button key={item.id} onClick={() => { onNav(item.navTo || item.id); onClose?.(); }}
-              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", background: isActive ? activeItemBg : "transparent", color: isActive ? T.sidebarAct : T.sidebarText, fontSize: 13, fontWeight: isActive ? 600 : 400, letterSpacing: "0.01em", transition: "all 0.15s", borderLeft: isActive ? `2px solid ${T.teal}` : "2px solid transparent" }}>
+              className={`side-nav-btn ${isLight ? "side-nav-light" : "side-nav-dark"}`}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 20px", ...(isActive ? { background: activeItemBg } : {}), color: isActive ? T.sidebarAct : T.sidebarText, fontSize: 13, fontWeight: isActive ? 600 : 400, letterSpacing: "0.01em", borderLeft: isActive ? `2px solid ${T.teal}` : "2px solid transparent" }}>
               <span>{item.label}</span>
               {item.badge && (
                 <span style={{ background: T.accent, color: T.accentDark, fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 999 }}>
@@ -838,19 +997,13 @@ function Sidebar({ active, onNav, batches, isOpen, onClose }) {
       </nav>
       <div style={{ padding: "12px 20px 16px", borderTop: divider }}>
         <button onClick={toggle}
-          style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "transparent", border: `1px solid ${T.cardBorder}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, color: T.sidebarText, marginBottom: 12 }}>
+          className={`side-nav-btn ${isLight ? "side-nav-light" : "side-nav-dark"}`}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", border: `1px solid ${T.cardBorder}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, color: T.sidebarText, marginBottom: 12 }}>
           {isLight ? <IcoMoon s={13} /> : <IcoSun s={13} />}
           {isLight ? "Tema oscuro" : "Tema claro"}
         </button>
-        <div style={{ fontSize: 9, fontWeight: 700, color: footerTextColor, letterSpacing: "0.1em", textTransform: "uppercase", lineHeight: 1.5, marginBottom: 10 }}>
+        <div style={{ fontSize: 9, fontWeight: 700, color: footerTextColor, letterSpacing: "0.1em", textTransform: "uppercase", lineHeight: 1.5 }}>
           Together our future is bright.
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 28, height: 28, borderRadius: "50%", background: T.accent, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: T.accentDark, flexShrink: 0 }}>A</div>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: T.sidebarAct }}>Alex Rivera</div>
-            <div style={{ fontSize: 10, color: T.sidebarText }}>Pro Plan</div>
-          </div>
         </div>
       </div>
     </aside>
@@ -1792,7 +1945,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       {(brand?.logoWhite || brand?.logoDark || brand?.logoPrimary) ? (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
           {(brand.logoWhite || brand.logoDark || brand.logoPrimary)?.data && (
-            <img src={(brand.logoWhite || brand.logoDark || brand.logoPrimary).data} alt="logo" style={{ height: 28, maxWidth: 100, objectFit: "contain", background: T.cream, borderRadius: 4, padding: 4 }} />
+            <ZoomableThumb src={(brand.logoWhite || brand.logoDark || brand.logoPrimary).data} title={`Logo de ${brand?.name || "la marca"}`} style={{ height: 28, maxWidth: 100, objectFit: "contain", background: T.cream, borderRadius: 4, padding: 4 }} />
           )}
           <span style={{ fontSize: 12, color: T.tealText }}>✓ Logo cargado — se usa en las creatividades generadas.</span>
           <span style={{ fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>Para más versiones (blanco/oscuro): Estudio de marca → Activos</span>
@@ -1823,13 +1976,15 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         </label>
         {cfg.replicateImage ? (
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
-            <img src={cfg.replicateImage.data} alt={cfg.replicateImage.name} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
+            <ZoomableThumb src={cfg.replicateImage.data} title={cfg.replicateImage.name} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
             <span style={{ fontSize: 12, color: T.textMuted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cfg.replicateImage.name}</span>
             <button onClick={() => set("replicateImage", null)} style={{ fontSize: 11, color: T.textMuted, background: "transparent" }}>Cambiar ×</button>
           </div>
         ) : (
           <div onClick={() => replicateImgRef.current?.click()}
-            style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 12, padding: "28px 20px", textAlign: "center", cursor: "pointer", background: T.card }}>
+            onMouseEnter={e => e.currentTarget.style.borderColor = T.textMuted}
+            onMouseLeave={e => e.currentTarget.style.borderColor = T.cardBorder}
+            style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 12, padding: "28px 20px", textAlign: "center", cursor: "pointer", transition: "border-color 0.15s", background: T.card }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Subir creatividad de referencia</div>
             <div style={{ fontSize: 12, color: T.textMuted }}>PNG o JPG — un anuncio ya hecho, de esta marca o de otra</div>
           </div>
@@ -1860,18 +2015,11 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
           Referencias visuales <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional — hasta 6</span>
         </label>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          {cfg.refImages.map((img, i) => (
-            <div key={i} style={{ position: "relative" }}>
-              <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}` }} />
-              <button onClick={() => set("refImages", cfg.refImages.filter((_, j) => j !== i))}
-                style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-            </div>
-          ))}
-          {cfg.refImages.length < 6 && (
-            <button onClick={() => refImgRef.current?.click()}
-              style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
-          )}
+        <div style={{ marginBottom: 12 }}>
+          <RefImagesStrip images={cfg.refImages}
+            onRemove={i => set("refImages", cfg.refImages.filter((_, j) => j !== i))}
+            onAddClick={() => refImgRef.current?.click()}
+            canAdd={cfg.refImages.length < 6} />
         </div>
         <input ref={refImgRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handleRefImagesUpload} />
         <p style={{ fontSize: 11, color: T.textLight }}>Ej. moodboard, fotos de campañas anteriores, referencias de estilo. Se analizan una vez al lanzar el lote.</p>
@@ -1976,6 +2124,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   const [pilotCandidates, setPilotCandidates] = useState([]);
   const [pilotSelected, setPilotSelected] = useState(null);
   const [pipelineError, setPipelineError] = useState("");
+  const [lightbox, setLightbox] = useState(null); // { images, index } | null
   const brand = brands.find(b => b.id === batch.config.brandId) || brands[0] || DEFAULT_BRANDS[0];
   const isPausedRef   = useRef(false);
   const isCancelledRef = useRef(false);
@@ -2511,6 +2660,17 @@ function BatchProcessor({ batch, brands, onUpdate }) {
   }
 
   const done = items.filter(it => ["generated","imaged","imageFailed","researchFailed","copyFailed"].includes(it.status)).length;
+  // Colecciones para el visor: candidatos piloto con imagen y filas ya
+  // compuestas — permiten ampliar/navegar sin interferir con la selección.
+  const pilotImages = pilotDirections.map(d => {
+    const cand = pilotCandidates.find(c => c.styleId === d.id);
+    const thumb = cand?.composited ? Object.values(cand.composited)[0] : null;
+    return thumb ? { styleId: d.id, src: thumb, title: d.label, subtitle: d.description, downloadName: `piloto_${d.id}.png` } : null;
+  }).filter(Boolean);
+  const rowImages = items.map((it, idx) => {
+    const thumb = it.composited ? Object.values(it.composited)[0] : null;
+    return thumb ? { itemIdx: idx, src: thumb, title: it.name, subtitle: it.siglas || "", downloadName: `${(it.siglas || it.name || "ad").replace(/\s/g, "_")}.png` } : null;
+  }).filter(Boolean);
   const missingApiKey = !hasApiKey();
   const total = batch.config.courses?.length || 0;
   const barColor = ctrl === "error" ? T.coral : ctrl === "cancelled" ? T.coral : ctrl === "paused" ? T.textMuted : phase === "done" ? T.teal : T.text;
@@ -2595,6 +2755,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
                 <div key={direction.id}
                   onClick={() => { if (canSelect) setPilotSelected(direction.id); }}
                   title={direction.description}
+                  onMouseEnter={e => { if (canSelect && !isSelected) e.currentTarget.style.borderColor = T.teal; }}
+                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = T.cardBorder; }}
                   style={{ width: 150, cursor: canSelect ? "pointer" : "default", background: T.card, borderRadius: 12, overflow: "hidden", border: `2px solid ${isSelected ? T.teal : T.cardBorder}`, boxShadow: isSelected ? "0 0 0 3px rgba(96,191,184,0.15)" : "none", transition: "border-color 0.15s, box-shadow 0.15s" }}>
                   <div style={{ position: "relative", width: 150, height: 188, background: T.cream, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {thumb
@@ -2605,6 +2767,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
                     }
                     {isSelected && (
                       <div style={{ position: "absolute", top: 8, right: 8, width: 22, height: 22, borderRadius: "50%", background: T.teal, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff", fontWeight: 700 }}>✓</div>
+                    )}
+                    {thumb && (
+                      <ExpandBtn onClick={() => setLightbox({ images: pilotImages, index: Math.max(0, pilotImages.findIndex(p => p.styleId === direction.id)) })} />
                     )}
                   </div>
                   <div style={{ padding: "8px 10px", borderTop: `1px solid ${T.cardBorder}` }}>
@@ -2641,7 +2806,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
                 {(isImaging || isResearching) && <div className="spin" style={{ width: 8, height: 8, border: "1.5px solid transparent", borderTopColor: "#fff", borderRadius: "50%" }} />}
               </div>
               {firstThumb
-                ? <img src={firstThumb} style={{ width: 36, height: 36, borderRadius: 4, objectFit: "cover", border: `1px solid ${T.cardBorder}`, flexShrink: 0 }} alt="" />
+                ? <img src={firstThumb} alt={`Ampliar ${it.name}`} title="Ampliar"
+                    onClick={() => setLightbox({ images: rowImages, index: Math.max(0, rowImages.findIndex(r => r.itemIdx === i)) })}
+                    style={{ width: 36, height: 36, borderRadius: 4, objectFit: "cover", border: `1px solid ${T.cardBorder}`, flexShrink: 0, cursor: "zoom-in" }} />
                 : <div style={{ width: 36, height: 36, borderRadius: 4, background: T.cream, flexShrink: 0 }} />
               }
               <span style={{ flex: 1, fontSize: 12, fontWeight: 500, color: isImaged ? T.text : T.textMuted, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
@@ -2657,6 +2824,11 @@ function BatchProcessor({ batch, brands, onUpdate }) {
           </div>
         ))}
       </div>
+      {lightbox && (
+        <Lightbox images={lightbox.images} index={lightbox.index}
+          onClose={() => setLightbox(null)}
+          onNav={i => setLightbox(lb => lb && { ...lb, index: i })} />
+      )}
     </div>
   );
 }
@@ -2890,7 +3062,7 @@ function BrandsScreen({ brands, onSave }) {
                 </div>
               </div>
               {val?.data && val.data.startsWith("data:image") && (
-                <img src={val.data} style={{ height: 28, maxWidth: 80, objectFit: "contain", margin: "0 12px" }} alt="preview" />
+                <ZoomableThumb src={val.data} title={asset.label} style={{ height: 28, maxWidth: 80, objectFit: "contain", margin: "0 12px" }} />
               )}
               <button onClick={() => aRef.current?.click()} style={{ background: T.text, color: T.cream, fontSize: 11, fontWeight: 500, padding: "5px 12px", borderRadius: 999, flexShrink: 0 }}>Subir</button>
               <input ref={aRef} type="file" accept={asset.accept} style={{ display: "none" }} onChange={e => {
@@ -2973,7 +3145,9 @@ function BrandsScreen({ brands, onSave }) {
             const on = (adRules.formats || []).includes(fmt.id);
             return (
               <div key={fmt.id} onClick={() => { const cur = adRules.formats || []; f("adRules", { ...adRules, formats: on ? cur.filter(x => x !== fmt.id) : [...cur, fmt.id] }); }}
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", border: `1px solid ${on ? T.text : T.cardBorder}`, borderRadius: 8, marginBottom: 6, background: on ? "#F4F4F4" : T.card, cursor: "pointer" }}>
+                onMouseEnter={e => { if (!on) e.currentTarget.style.borderColor = T.textMuted; }}
+                onMouseLeave={e => { if (!on) e.currentTarget.style.borderColor = T.cardBorder; }}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", border: `1px solid ${on ? T.text : T.cardBorder}`, borderRadius: 8, marginBottom: 6, background: on ? "#F4F4F4" : T.card, cursor: "pointer", transition: "border-color 0.15s" }}>
                 <span style={{ fontSize: 12, fontWeight: 500, color: on ? T.text : T.textMuted }}>{fmt.label}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ fontSize: 11, color: T.textMuted, fontFamily: "monospace" }}>{fmt.dim}</span>
@@ -3030,18 +3204,11 @@ function BrandsScreen({ brands, onSave }) {
           </div>
 
           {/* Upload */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-            {refImgs.map((img, i) => (
-              <div key={i} style={{ position: "relative" }}>
-                <img src={img.data} alt={img.name} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.cardBorder}` }} />
-                <button onClick={() => f("refImages", refImgs.filter((_, j) => j !== i))}
-                  style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e53", color: "#fff", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-              </div>
-            ))}
-            {refImgs.length < 8 && (
-              <button onClick={() => refRef.current?.click()}
-                style={{ width: 72, height: 72, borderRadius: 8, border: `2px dashed ${T.cardBorder}`, background: T.card, fontSize: 22, color: T.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
-            )}
+          <div style={{ marginBottom: 16 }}>
+            <RefImagesStrip images={refImgs}
+              onRemove={i => f("refImages", refImgs.filter((_, j) => j !== i))}
+              onAddClick={() => refRef.current?.click()}
+              canAdd={refImgs.length < 8} />
           </div>
           <input ref={refRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={addRefImages} />
 
@@ -3248,19 +3415,35 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
     });
   });
 
+  const [lightboxIdx, setLightboxIdx] = useState(null);
+
   if (cards.length === 0) return null;
 
   const CARD_H = 180;
   const QA_LABELS = { overflow: "texto se sale del margen inferior", margin: "texto pegado al borde" };
 
+  const lightboxImages = cards.map(({ item, dataURL, label, fmtKey }) => {
+    const firstCopy = Array.isArray(item.copies) ? item.copies[0] : (item.copies || {});
+    return {
+      src: dataURL,
+      title: `${item.siglas ? `[${item.siglas}] ` : ""}${item.name}`,
+      subtitle: [label, firstCopy.headline].filter(Boolean).join(" · "),
+      downloadName: `${(item.siglas || item.name || "ad").replace(/\s/g, "_")}_${fmtKey}.png`,
+    };
+  });
+
   return (
+    <>
     <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-      {cards.map(({ item, fmtKey, dataURL, label, fmtSize, cardKey, qaIssues }) => {
+      {cards.map(({ item, fmtKey, dataURL, label, fmtSize, cardKey, qaIssues }, cardIdx) => {
         const isApproved = approved.has(cardKey);
         const previewW = Math.max(90, Math.round(CARD_H * (fmtSize.w / fmtSize.h)));
         const firstCopy = Array.isArray(item.copies) ? item.copies[0] : (item.copies || {});
         return (
-          <div key={cardKey} onClick={() => onToggle(cardKey)} style={{ cursor: "pointer", display: "flex", flexDirection: "column", background: T.card, borderRadius: 12, overflow: "hidden", border: `2px solid ${isApproved ? T.teal : "#E96A73"}`, boxShadow: isApproved ? "0 0 0 3px rgba(96,191,184,0.15)" : "0 0 0 3px rgba(233,106,115,0.12)", transition: "border-color 0.15s, box-shadow 0.15s", width: previewW + 2 }}>
+          <div key={cardKey} onClick={() => onToggle(cardKey)}
+            onMouseEnter={e => e.currentTarget.style.transform = "translateY(-2px)"}
+            onMouseLeave={e => e.currentTarget.style.transform = ""}
+            style={{ cursor: "pointer", display: "flex", flexDirection: "column", background: T.card, borderRadius: 12, overflow: "hidden", border: `2px solid ${isApproved ? T.teal : "#E96A73"}`, boxShadow: isApproved ? "0 0 0 3px rgba(96,191,184,0.15)" : "0 0 0 3px rgba(233,106,115,0.12)", transition: "border-color 0.15s, box-shadow 0.15s, transform 0.15s", width: previewW + 2 }}>
             {/* Image */}
             <div style={{ position: "relative" }}>
               <img src={dataURL} alt={label} style={{ width: previewW, height: CARD_H, objectFit: "cover", display: "block" }} />
@@ -3279,6 +3462,7 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
                   ⚠
                 </div>
               )}
+              <ExpandBtn onClick={() => setLightboxIdx(cardIdx)} />
             </div>
             {/* Info */}
             <div style={{ padding: "8px 10px", borderTop: `1px solid ${T.cardBorder}` }}>
@@ -3302,6 +3486,11 @@ function ImageApprovalGrid({ items, approved, onToggle }) {
         );
       })}
     </div>
+    {lightboxIdx !== null && (
+      <Lightbox images={lightboxImages} index={lightboxIdx}
+        onClose={() => setLightboxIdx(null)} onNav={setLightboxIdx} />
+    )}
+    </>
   );
 }
 
