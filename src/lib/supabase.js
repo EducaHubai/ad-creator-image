@@ -57,6 +57,11 @@ export async function updateBatch(id, patch) {
   return api(`/api/db/batches/${id}`, { method: "PATCH", body: patch });
 }
 
+// Borra el lote, sus creatividades (cascada) y sus imágenes del bucket.
+export async function deleteBatch(id) {
+  return api(`/api/db/batches/${id}`, { method: "DELETE" });
+}
+
 // ─── CREATIVES ─────────────────────────────────────────────────────────
 export async function fetchCreatives(batchId) {
   return (await api(`/api/db/creatives?batch_id=${encodeURIComponent(batchId)}`)) || [];

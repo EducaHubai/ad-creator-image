@@ -412,6 +412,34 @@ app.patch("/api/db/batches/:id", (req, res) => {
   reply(res, supabase.from(table("batches")).update(req.body).eq("id", req.params.id).select().single());
 });
 
+// Borra un lote y todo lo asociado: primero los archivos del bucket creatives
+// (viven bajo el prefijo <batchId>/), después la fila — las filas de creatives
+// caen solas por la FK on delete cascade. Si el borrado de Storage falla se
+// sigue igualmente con la fila: mejor un huérfano en el bucket que un lote
+// que no se puede eliminar.
+app.delete("/api/db/batches/:id", async (req, res) => {
+  if (!requireDb(res)) return;
+  const id = req.params.id;
+  try {
+    for (;;) {
+      const { data: files, error } = await supabase.storage.from("creatives").list(id, { limit: 100 });
+      if (error || !files?.length) {
+        if (error) console.warn(`[storage] No se pudieron listar creatividades de ${id}:`, error.message);
+        break;
+      }
+      const { error: rmErr } = await supabase.storage.from("creatives").remove(files.map(f => `${id}/${f.name}`));
+      if (rmErr) {
+        console.warn(`[storage] No se pudieron borrar creatividades de ${id}:`, rmErr.message);
+        break;
+      }
+      if (files.length < 100) break;
+    }
+    reply(res, supabase.from(table("batches")).delete().eq("id", id).select().maybeSingle());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Totales para las tarjetas del Dashboard. No usa la vista v_stats_totals:
 // esa calcula tiempo ahorrado por creatives.format_id, que la app deja null
 // (los formatos viajan en format_label) — aquí se casa format_label con
