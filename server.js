@@ -515,18 +515,30 @@ app.post("/api/storage/upload", async (req, res) => {
   }
 });
 
-app.post("/api/storage/signed-url", async (req, res) => {
+// Proxy de lectura de Storage (patrón /api/img/* de course-cover-engine).
+// Una signedURL generada aquí apuntaría a SUPABASE_URL (kong:8000), que el
+// navegador no puede resolver — el Supabase solo es alcanzable desde la red
+// interna de Coolify y su dominio público está roto a propósito. El server,
+// que sí llega, descarga el objeto con la SERVICE key y lo sirve same-origin
+// (bonus: los logos ya no contaminan el canvas del compositor).
+app.get("/api/storage/file/:bucket/*path", async (req, res) => {
   if (!requireDb(res)) return;
-  const { bucket, path: filePath, expiresIn } = req.body || {};
+  const { bucket } = req.params;
+  const filePath = [].concat(req.params.path || []).join("/");
   if (!ALLOWED_BUCKETS.has(bucket) || !filePath) {
     return res.status(400).json({ error: "bucket/path requeridos" });
   }
   try {
-    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(filePath, expiresIn || 3600);
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ signedUrl: data?.signedUrl || null });
+    const { data, error } = await supabase.storage.from(bucket).download(filePath);
+    if (error) return res.status(404).json({ error: error.message });
+    const buf = Buffer.from(await data.arrayBuffer());
+    res.set("Content-Type", data.type || "application/octet-stream");
+    // Las creatividades llevan uuid en el path (inmutables); los brand-assets
+    // se reemplazan bajo el mismo nombre — caché corta para ver el cambio.
+    res.set("Cache-Control", bucket === "creatives" ? "public, max-age=31536000, immutable" : "public, max-age=300");
+    res.send(buf);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(502).json({ error: err.message });
   }
 });
 

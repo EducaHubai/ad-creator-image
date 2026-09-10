@@ -3518,20 +3518,31 @@ async function exportBatchZip(batch, approvedKeys = null) {
   zip.file("ads.csv", rows.join("\n"));
   zip.file("campaign.json", JSON.stringify({ name: batch.name, brand: batch.brand, config: batch.config }, null, 2));
 
-  // PNGs — composited images, filtered by approvedKeys if provided
+  // Imágenes compuestas, filtradas por approvedKeys si se pasa. Recién
+  // generadas son data URLs PNG; en lotes retomados de la BD son URLs del
+  // proxy de storage (webp) — esas se descargan como blob.
   const imgFolder = zip.folder("images");
-  (batch.items || []).forEach((item, itemIdx) => {
-    if (!item.composited) return;
+  await Promise.all((batch.items || []).flatMap((item, itemIdx) => {
+    if (!item.composited) return [];
     const safeName = (item.siglas || item.name || "item").replace(/[^a-z0-9]/gi, "_").slice(0, 40);
-    for (const [fmtKey, dataURL] of Object.entries(item.composited)) {
-      if (!dataURL) continue;
+    return Object.entries(item.composited).map(async ([fmtKey, src]) => {
+      if (!src) return;
       const cardKey = `${itemIdx}-${fmtKey}`;
-      if (approvedKeys && !approvedKeys.has(cardKey)) continue;
-      const b64 = dataURL.replace(/^data:image\/png;base64,/, "");
+      if (approvedKeys && !approvedKeys.has(cardKey)) return;
       const safeFmt = String(fmtKey).replace(/[^a-z0-9]/gi, "_");
-      imgFolder.file(`${safeName}__${safeFmt}.png`, b64, { base64: true });
-    }
-  });
+      if (src.startsWith("data:")) {
+        imgFolder.file(`${safeName}__${safeFmt}.png`, src.split(",")[1], { base64: true });
+      } else {
+        try {
+          const blob = await (await fetch(src)).blob();
+          const ext = blob.type === "image/webp" ? "webp" : blob.type === "image/jpeg" ? "jpg" : "png";
+          imgFolder.file(`${safeName}__${safeFmt}.${ext}`, blob);
+        } catch (err) {
+          console.warn("No se pudo incluir en el ZIP:", src, err.message);
+        }
+      }
+    });
+  }));
 
   const blob = await zip.generateAsync({ type: "blob" });
   const url = URL.createObjectURL(blob);

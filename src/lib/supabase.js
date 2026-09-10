@@ -75,7 +75,10 @@ export async function uploadFile(bucket, path, dataUrlOrBase64, mimeHint = "imag
   return storedPath || path;
 }
 
-export async function getSignedUrl(bucket, path, expiresIn = 3600) {
-  const { signedUrl } = await api("/api/storage/signed-url", { method: "POST", body: { bucket, path, expiresIn } });
-  return signedUrl || null;
+// Ya no firma nada: los buckets viven detrás de kong (inalcanzable desde el
+// navegador), así que el server sirve los objetos por proxy same-origin.
+// Mantiene la firma async (con expiresIn ignorado) para no tocar los callers.
+export async function getSignedUrl(bucket, path) {
+  if (!path) return null;
+  return `/api/storage/file/${bucket}/${String(path).split("/").map(encodeURIComponent).join("/")}`;
 }
