@@ -452,24 +452,54 @@ async function analyzeRefImages(refImages) {
 // STYLE_VARIANTS-style direction.description with no brainstorm step to
 // refine it, so it needs to be detailed and concrete enough to hand straight
 // to an image generation model, not just a mood blurb.
+// Structured analysis, not a free-text blurb — forces the model to actually
+// nail down each dimension (photo type, where the title/logo sit, palette,
+// other elements) instead of a vague summary that tends to miss the layout
+// details needed to replicate it consistently across every course/format.
 async function analyzeReferenceCreative(imageSrc) {
   if (!imageSrc) return "";
   const imageDataUrl = await srcToDataUrl(imageSrc);
-  const result = await callOpenAIVision(
-    `You are a visual art director. Analyze this ad creative and describe ONLY its abstract background/visual design system — layout zones, color blocks and palette, photographic treatment/lighting/mood — in enough detail to regenerate an equivalent design for a completely different course topic, with entirely different photographic subject matter.
+  const raw = await callOpenAIVision(
+    `You are a visual art director. Analyze this ad creative's design system and return ONLY valid JSON (no markdown, no preamble) with this exact shape:
+{
+  "photoType": "individual" | "group" | "product" | "other",
+  "photoTypeDetail": "brief shot description — framing/crop, e.g. close-up upper body, wide full-body, flat-lay product",
+  "titleZone": "where the title/headline block sits, e.g. 'top-left, on a solid dark band covering ~40% width'",
+  "logoZone": "where the logo sits, e.g. 'top-left corner, small, over the title band'",
+  "colorPalette": ["#hex or short color name", "..."],
+  "otherElements": [{"element": "short name, e.g. CTA pill / keyword tags / corner accent shape", "position": "where it sits"}],
+  "photographicMood": "lighting/treatment/style only — warmth, contrast, depth of field, framing style"
+}
 
 CRITICAL — two things you must NOT do:
-1. Do not describe the specific photographic subject (who/what is depicted — people, objects, actions). That subject belongs to THIS reference only and must NOT carry over; the regenerated version needs its own subject matching a different course. Describe the photographic STYLE/mood/lighting/treatment only (e.g. "warm, soft-lit close-up lifestyle photography"), never the literal content of the shot.
-2. Do not describe any zone as containing text, a headline, a title block, typography, or lettering of any kind — not even to say "a title area" or "bold text block". Any such zone must be described purely as an empty/reserved solid-color panel with no characters in it. The regenerated image must never contain rendered letters, words, or typographic mockups — text is composited on top separately, in code, afterward.
-
-Return ONLY the description, 3-5 sentences, no markdown, no preamble.`,
+1. Do not describe the specific photographic subject (who/what is depicted — the actual people, objects, actions in the shot). That subject belongs to THIS reference only and must NOT carry over; the regenerated version needs its own subject matching a different course. photographicMood/photoTypeDetail describe STYLE only (e.g. "warm, soft-lit close-up lifestyle photography"), never literal content.
+2. Do not describe titleZone, logoZone, or any otherElements entry as containing rendered text/letters/typography — describe them purely as empty/reserved panels or shapes reserved for content added separately, in code, afterward. The regenerated image must never contain actual letters or words.`,
     [
       { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
-      { type: "text", text: "Describe this creative's abstract background/visual design system (layout, color, photographic mood) for replication with a different subject and topic. No text, no specific subject matter." },
+      { type: "text", text: "Analyze this creative's design system as the JSON schema described. No text/lettering in any zone description, no specific subject matter." },
     ],
-    400
+    500
   );
-  return result.trim();
+
+  try {
+    const d = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    const palette = Array.isArray(d.colorPalette) ? d.colorPalette.join(", ") : "";
+    const otherElements = Array.isArray(d.otherElements)
+      ? d.otherElements.map(e => `${e.element} (${e.position})`).join("; ")
+      : "";
+    return [
+      d.photoType ? `Tipo de foto: ${d.photoType}${d.photoTypeDetail ? ` — ${d.photoTypeDetail}` : ""}.` : "",
+      d.photographicMood ? `Tratamiento fotográfico: ${d.photographicMood}.` : "",
+      d.titleZone ? `Zona reservada para el título (panel vacío, sin letras): ${d.titleZone}.` : "",
+      d.logoZone ? `Zona reservada para el logo (vacía, sin logotipo real): ${d.logoZone}.` : "",
+      palette ? `Paleta: ${palette}.` : "",
+      otherElements ? `Otros elementos (formas/paneles vacíos, sin texto): ${otherElements}.` : "",
+    ].filter(Boolean).join(" ");
+  } catch {
+    // Model didn't return valid JSON — fall back to the raw text as-is,
+    // still usable as a (less structured) description.
+    return raw.trim();
+  }
 }
 
 // ─── IMAGE GENERATION ────────────────────────────────────────────────
@@ -492,10 +522,22 @@ const AR_HINTS = {
   "2:3":  "2:3 portrait aspect ratio",
 };
 
+// Accepts "1200x800", "1200×800", "1200 x 800", "1200×800px" — anything with
+// two numbers separated by an x/×. Returns null (not a silent fallback) when
+// unparseable, so the UI can show a real "esto no es válido" instead of
+// quietly generating a default 1080×1080 the user never asked for.
+function parseCustomDim(dim) {
+  const m = String(dim || "").match(/(\d+)\s*[×x]\s*(\d+)/i);
+  if (!m) return null;
+  const w = parseInt(m[1], 10), h = parseInt(m[2], 10);
+  if (!w || !h) return null;
+  return { w, h };
+}
+
 function customDimToSize(dim) {
-  const m = String(dim || "").match(/(\d+)[×x](\d+)/i);
-  if (!m) return { w: 1080, h: 1080, api: "1:1" };
-  const w = parseInt(m[1]), h = parseInt(m[2]);
+  const parsed = parseCustomDim(dim);
+  if (!parsed) return { w: 1080, h: 1080, api: "1:1" };
+  const { w, h } = parsed;
   const ratio = w / h;
   if (ratio > 1.3) return { w, h, api: "3:2" };
   if (ratio < 0.8) return { w, h, api: "2:3" };
@@ -618,11 +660,18 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   const ctaBgColor   = colors.accent          || "#963058";
   const ctaFgColor   = colors.cta_text        || "#FFFFFF";
 
-  // Background image
+  // Background image — "cover" fit: scale proportionally to fill the canvas
+  // (cropping overflow) instead of stretching, since the generated image's
+  // aspect ratio rarely matches every target format exactly.
   if (imageB64) {
     await new Promise(resolve => {
       const img = new Image();
-      img.onload = () => { ctx.drawImage(img, 0, 0, width, height); resolve(); };
+      img.onload = () => {
+        const scale = Math.max(width / img.naturalWidth, height / img.naturalHeight);
+        const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+        ctx.drawImage(img, (width - dw) / 2, (height - dh) / 2, dw, dh);
+        resolve();
+      };
       img.onerror = resolve;
       img.src = `data:image/png;base64,${imageB64}`;
     });
@@ -1750,9 +1799,13 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         })}
         {/* Custom format */}
         {(() => {
-          const hasCustom = cfg.customDim.trim().length > 0;
+          const typed = cfg.customDim.trim().length > 0;
+          const parsed = parseCustomDim(cfg.customDim);
+          const invalid = typed && !parsed;
+          const hasCustom = !!parsed;
+          const accent = invalid ? "#963058" : T.accent;
           return (
-            <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? "#EAF7F6" : T.card, textAlign: "left", transition: "all 0.15s" }}>
+            <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.accent : invalid ? accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? "#EAF7F6" : T.card, textAlign: "left", transition: "all 0.15s" }}>
               {/* Colores fijos: el fondo activo (#EAF7F6) es claro en ambos temas. */}
               <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? "#2A7A73" : T.cardBorder}`, borderRadius: 3, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <span style={{ fontSize: 9, color: hasCustom ? "#2A7A73" : T.textMuted, fontWeight: 700 }}>+</span>
@@ -1763,8 +1816,14 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
                 onChange={e => set("customDim", e.target.value)}
                 placeholder="1200×800"
                 onClick={e => e.stopPropagation()}
-                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${T.cardBorder}`, borderRadius: 5, background: hasCustom ? "#FFFFFF" : T.cream, fontSize: 10, color: hasCustom ? "#202020" : T.text, fontFamily: "monospace" }}
+                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${invalid ? accent : T.cardBorder}`, borderRadius: 5, background: hasCustom ? "#FFFFFF" : T.cream, fontSize: 10, color: hasCustom ? "#202020" : T.text, fontFamily: "monospace" }}
               />
+              {parsed && (
+                <div style={{ fontSize: 9, color: "#2A7A73", marginTop: 4 }}>→ {parsed.w}×{parsed.h}px</div>
+              )}
+              {invalid && (
+                <div style={{ fontSize: 9, color: accent, marginTop: 4 }}>Formato inválido — usá Anchoxalto, ej. 1200x800</div>
+              )}
             </div>
           );
         })()}
@@ -1816,7 +1875,10 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     }
   }
 
-  const hasFormats = cfg.formats.length > 0 || cfg.customDim.trim().length > 0;
+  // A custom size only counts once it actually parses — typing garbage
+  // used to silently fall back to a 1080×1080 default at generation time.
+  const hasValidCustomDim = !!parseCustomDim(cfg.customDim);
+  const hasFormats = cfg.formats.length > 0 || hasValidCustomDim;
   const usePilotFlowEstimate = path !== "replicate" && hasApiKey() && cfg.courses.length > 0 && cfg.courses.some(c => c.keywords5?.length);
   const { imagesEstimate, costEstimate } = estimateBatchCost(cfg.courses.length, usePilotFlowEstimate);
   const [showCostConfirm, setShowCostConfirm] = useState(false);
@@ -1871,7 +1933,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", refImages: [], replicateImage: null });
   }
 
-  // Paso: Marca + Objetivo + Variantes — shared by both paths.
+  // Paso: Marca + Objetivo — shared by both paths.
   const stepBrand = (
     <div key="brand" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Configuración de campaña</h2>
@@ -1899,18 +1961,6 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         </div>
       )}
 
-      <div>
-        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Variantes por curso <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>elige cuántas versiones generar</span>
-        </label>
-        <div style={{ display: "flex", gap: 8 }}>
-          {[1, 2, 3, 4, 5, 6].map(n => (
-            <button key={n} onClick={() => set("variantCount", n)} style={{ width: 44, height: 44, borderRadius: 10, border: `1.5px solid ${cfg.variantCount === n ? T.text : T.cardBorder}`, background: cfg.variantCount === n ? T.text : T.card, color: cfg.variantCount === n ? T.cream : T.textMuted, fontSize: 15, fontWeight: 600, transition: "all 0.15s", flexShrink: 0 }}>
-              {n}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 
@@ -2197,9 +2247,8 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
                 ["Puntos de dolor", cfg.painPoints.join(" · ") || "—"],
                 ["CTAs", cfg.ctas.join(" / ") || "—"],
               ]),
-          ["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...(cfg.customDim ? [`Custom ${cfg.customDim}`] : [])].join(", ")],
-          ["Variantes por curso", `${cfg.variantCount}`],
-          ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} anuncios`],
+          ["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...(hasValidCustomDim ? [`Custom ${cfg.customDim}`] : [])].join(", ")],
+          ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + (hasValidCustomDim ? 1 : 0))} anuncios`],
           ...(cfg.refImages.length ? [["Referencias visuales", `${cfg.refImages.length} imagen(es)`]] : []),
         ].map(([k, v], i, arr) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "12px 20px", borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
@@ -2214,7 +2263,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
 
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + (cfg.customDim ? 1 : 0)) * cfg.variantCount} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + (hasValidCustomDim ? 1 : 0)) * cfg.variantCount} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
           <div style={{ fontSize: 11, color: T.white, opacity: 0.75 }}>La IA investigará cada URL y generará copy + prompts de imagen</div>
         </div>
         <button onClick={() => setShowCostConfirm(true)} disabled={launching} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap", opacity: launching ? 0.7 : 1, cursor: launching ? "wait" : "pointer" }}>
@@ -2493,7 +2542,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     const variantCount = batch.config.variantCount || 1;
 
     const selectedFormats = batch.config.formats || [];
-    const customDim = batch.config.customDim;
+    // Only a genuinely parseable custom size counts — leftover invalid text
+    // (e.g. "abc") must never silently become a phantom 1080×1080 format.
+    const customDim = parseCustomDim(batch.config.customDim) ? batch.config.customDim : null;
     const formatList = [
       ...selectedFormats.map(fid => ({ key: fid, ...(FORMAT_SIZES[fid] || { w: 1080, h: 1080, api: "1024x1024" }) })),
       ...(customDim ? [{ key: customDim, ...customDimToSize(customDim) }] : []),
@@ -2822,7 +2873,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     setCtrl("done");
     setPhase("done");
     setProgress(100);
-    const allFormats = [...(batch.config.formats || []), ...(batch.config.customDim ? [batch.config.customDim] : [])];
+    const allFormats = [...(batch.config.formats || []), ...(customDim ? [customDim] : [])];
     const finalAdsCount = researched.length * allFormats.length * variantCount;
     onUpdate(batch.id, {
       status: "review",
@@ -3582,7 +3633,7 @@ async function exportBatchZip(batch, approvedKeys = null) {
 
   const allFormats = [
     ...(batch.config?.formats || []).map(f => FORMATS.find(x => x.id === f)?.label || f),
-    ...(batch.config?.customDim ? [`Custom_${batch.config.customDim}`] : []),
+    ...(parseCustomDim(batch.config?.customDim) ? [`Custom_${batch.config.customDim}`] : []),
   ];
 
   const escCSV = v => `"${String(v || "").replace(/"/g, '""')}"`;
