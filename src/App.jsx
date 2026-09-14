@@ -456,10 +456,16 @@ async function analyzeReferenceCreative(imageSrc) {
   if (!imageSrc) return "";
   const imageDataUrl = await srcToDataUrl(imageSrc);
   const result = await callOpenAIVision(
-    "You are a visual art director. Analyze this ad creative and describe its background/visual design in enough concrete detail to regenerate an equivalent design for a different course, with different photographic content. Describe: composition and layout zones, color blocks and palette, photographic treatment/style, where empty/reserved space sits (for a logo and text overlay). Do NOT describe or transcribe any text, headline, or logo visible in the image — those get replaced separately. Return ONLY the description, 3-5 sentences, no markdown, no preamble.",
+    `You are a visual art director. Analyze this ad creative and describe ONLY its abstract background/visual design system — layout zones, color blocks and palette, photographic treatment/lighting/mood — in enough detail to regenerate an equivalent design for a completely different course topic, with entirely different photographic subject matter.
+
+CRITICAL — two things you must NOT do:
+1. Do not describe the specific photographic subject (who/what is depicted — people, objects, actions). That subject belongs to THIS reference only and must NOT carry over; the regenerated version needs its own subject matching a different course. Describe the photographic STYLE/mood/lighting/treatment only (e.g. "warm, soft-lit close-up lifestyle photography"), never the literal content of the shot.
+2. Do not describe any zone as containing text, a headline, a title block, typography, or lettering of any kind — not even to say "a title area" or "bold text block". Any such zone must be described purely as an empty/reserved solid-color panel with no characters in it. The regenerated image must never contain rendered letters, words, or typographic mockups — text is composited on top separately, in code, afterward.
+
+Return ONLY the description, 3-5 sentences, no markdown, no preamble.`,
     [
       { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
-      { type: "text", text: "Describe this creative's background/visual design for exact replication with different content." },
+      { type: "text", text: "Describe this creative's abstract background/visual design system (layout, color, photographic mood) for replication with a different subject and topic. No text, no specific subject matter." },
     ],
     400
   );
@@ -541,7 +547,8 @@ HARD RULES: NO text, NO logos, NO typography, NO people holding phones or signs,
 Color grading should harmonize with the brand palette above.
 Specify: mood, lighting quality, composition, depth of field, photographic style.`;
 
-  return (await callOpenAI(system, user, 280)).trim();
+  const authored = (await callOpenAI(system, user, 280)).trim();
+  return `${authored}\n\n${NO_TEXT_IMAGE_RULE}`;
 }
 
 async function generateImage(prompt, aspectRatio) {
@@ -1575,10 +1582,15 @@ const FALLBACK_STYLE_VARIANTS = [
   { label: "Grid de iconos",    description: "Chips redondeados con iconos representando cada tema del curso, sobre fondo de color de marca." },
 ];
 
+// Repeated verbatim, last, in every image-generation prompt below — image
+// models otherwise regularly ignore a single mild "no text" instruction and
+// bake in fake headline/title mockups (observed in production output).
+const NO_TEXT_IMAGE_RULE = `REGLA ABSOLUTA E INNEGOCIABLE: la imagen NO debe contener NINGÚN texto, letra, palabra, número, logotipo ni tipografía de ningún tipo, en ningún idioma — ni siquiera como mockup, marca de agua, cartel de fondo, o texto ilegible/decorativo. Cualquier zona que en otro momento se describió como "bloque de título" o "área de texto" debe pintarse como un panel liso de color plano, completamente vacío, sin ningún carácter dentro. El titular, el copy y el logo se superponen aparte, después, por código — si la imagen generada contiene aunque sea una sola letra o palabra falsa, es un resultado inválido.`;
+
 function buildGenericImageRules(brand) {
   const colors = brand.colors || {};
   const palette = [colors.primary, colors.secondary, colors.accent].filter(Boolean).join(", ") || "colores neutros de marca";
-  return `No incluir texto ni logotipos en la imagen. Paleta: ${palette}. Sin degradados ni formas orgánicas — composición limpia y geométrica. Dejar una esquina completamente limpia y de color plano para superponer el logo.`;
+  return `Paleta: ${palette}. Sin degradados ni formas orgánicas — composición limpia y geométrica. Dejar una esquina completamente limpia y de color plano para superponer el logo.`;
 }
 
 // Brainstorms 5 DISTINCT visual style directions for the pilot course, bound
@@ -1617,7 +1629,13 @@ Cada una de las 5 direcciones debe ser claramente distinta de las otras (varía 
 function buildStyleVariantPrompt(direction, brand, course, keywords5) {
   const kw = (keywords5 || []).join(", ") || "formación online";
   const commonRules = brand.brandImageStyle || buildGenericImageRules(brand);
-  return `Dirección "${direction.label}": ${direction.description}\n\nCurso: "${course.name}". Temas: ${kw}.\n\n${commonRules}`;
+  return `Dirección "${direction.label}": ${direction.description}
+
+Curso: "${course.name}". Temas: ${kw}. El contenido fotográfico (personas, objetos, escena, acción) debe representar visualmente ESTE curso y estos temas específicamente — nunca reutilizar literalmente el sujeto/escena de otra referencia o curso anterior, aunque la composición y paleta se mantengan iguales.
+
+${commonRules}
+
+${NO_TEXT_IMAGE_RULE}`;
 }
 
 function StepIndicator({ step, total }) {
