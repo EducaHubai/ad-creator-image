@@ -361,6 +361,26 @@ app.post("/api/llm/chat", async (req, res) => {
   }
 });
 
+// Proxy para modelos de imagen tipo OpenAI (gpt-image-1): usan la Images API,
+// no chat/completions con modalities (eso es solo para los modelos de imagen de
+// Gemini). Devuelven el PNG en data[0].b64_json.
+app.post("/api/llm/images", async (req, res) => {
+  if (!LITELLM_API_KEY || !LITELLM_BASE_URL) {
+    return res.status(500).json({ error: { message: "Faltan LITELLM_API_KEY / LITELLM_BASE_URL en el entorno del server" } });
+  }
+  try {
+    const upstream = await fetch(`${LITELLM_BASE_URL}/v1/images/generations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${LITELLM_API_KEY}` },
+      body: JSON.stringify(req.body),
+    });
+    const data = await upstream.json().catch(() => ({}));
+    res.status(upstream.status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: { message: err.message } });
+  }
+});
+
 // ── Supabase: DB + Storage detrás del server ─────────────────────────────────
 // El front llama a estos endpoints con las mismas semánticas que tenía con
 // supabase-js; los nombres de tablas/buckets viven solo aquí.

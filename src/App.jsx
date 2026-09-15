@@ -238,10 +238,27 @@ async function callLLMChat(body) {
   }, { label: body.model });
 }
 
+// Igual que callLLMChat pero contra la Images API (para gpt-image-1 y demás
+// modelos de imagen de OpenAI, que no pasan por chat/completions).
+async function callLLMImages(body) {
+  return withRetry(async () => {
+    const res = await fetch("/api/llm/images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
+    }
+    return res.json();
+  }, { label: body.model });
+}
+
 // ─── MODEL SELECTION ────────────────────────────────────────────────
-// Text model is user-selectable (dropdown in the TopBar), persisted in
-// localStorage so it survives reloads. Image model is fixed. LiteLLM routes
-// both by name — no per-provider keys or URLs needed here.
+// Text and image models are user-selectable (dropdowns in the confirm step),
+// persisted in localStorage so they survive reloads. LiteLLM routes both by
+// name — no per-provider keys or URLs needed here.
 const TEXT_MODELS = [
   { id: "gemini-2.5-flash",      label: "Gemini 2.5 Flash - Recomendado (mejor calidad/tokens)" },
   { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite - Más rápido y económico (menor calidad)" },
@@ -250,7 +267,15 @@ const TEXT_MODELS = [
 ];
 const DEFAULT_TEXT_MODEL = "gemini-2.5-flash";
 const TEXT_MODEL_STORAGE_KEY = "adbatch_text_model";
-const IMAGE_MODEL = "gemini-3-pro-image";
+
+// Los modelos de Gemini van por chat/completions con modalities; los de OpenAI
+// (provider "openai") por la Images API. generateImage() bifurca según provider.
+const IMAGE_MODELS = [
+  { id: "gemini-3-pro-image", label: "Gemini 3 Pro Image - Recomendado (nativo, cualquier ratio)", provider: "gemini" },
+  { id: "gpt-image-1",        label: "GPT Image 1 (OpenAI)", provider: "openai" },
+];
+const DEFAULT_IMAGE_MODEL = "gemini-3-pro-image";
+const IMAGE_MODEL_STORAGE_KEY = "adbatch_image_model";
 const IMG_DELAY_MS = 2000;
 
 function getTextModel() {
@@ -262,6 +287,16 @@ function getTextModel() {
 }
 function setTextModel(id) {
   try { localStorage.setItem(TEXT_MODEL_STORAGE_KEY, id); } catch { /* ignore */ }
+}
+function getImageModel() {
+  try {
+    const stored = localStorage.getItem(IMAGE_MODEL_STORAGE_KEY);
+    if (IMAGE_MODELS.some(m => m.id === stored)) return stored;
+  } catch { /* localStorage unavailable (SSR/privacy mode) — use default */ }
+  return DEFAULT_IMAGE_MODEL;
+}
+function setImageModel(id) {
+  try { localStorage.setItem(IMAGE_MODEL_STORAGE_KEY, id); } catch { /* ignore */ }
 }
 
 async function callOpenAI(systemPrompt, userMessage, maxTokens = 1000, model = getTextModel()) {
@@ -598,17 +633,43 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
 // models take image+text multimodal input, same shape as vision analysis.
 // Used by the replicate path to test exact-fidelity reproduction of the
 // uploaded creative rather than relying only on the derived text analysis.
+//
+// gpt-image-1 solo acepta tamaños fijos (cuadrado/vertical/horizontal). El AR
+// se mapea al más cercano y compositeAd estira al w×h exacto del formato después.
+const GPT_IMAGE_SIZES = {
+  "1:1":  "1024x1024",
+  "9:16": "1024x1536", "4:5": "1024x1536", "2:3": "1024x1536",
+  "16:9": "1536x1024", "3:2": "1536x1024",
+};
+
 async function generateImage(prompt, aspectRatio, referenceImageDataUrl) {
+  const modelId = getImageModel();
+  const arHint = AR_HINTS[aspectRatio] || `${aspectRatio} aspect ratio`;
+
+  if (IMAGE_MODELS.find(m => m.id === modelId)?.provider === "openai") {
+    // OpenAI image models van por la Images API (no chat/completions): devuelven
+    // el PNG en data[0].b64_json. gpt-image-1 no admite response_format ni una
+    // imagen de referencia por este endpoint, así que la ruta de replicar cae a
+    // solo-texto (para fidelidad exacta desde una imagen, usa un modelo Gemini).
+    const data = await callLLMImages({
+      model: modelId,
+      prompt: `${prompt}\n\nComposition: ${arHint}.`,
+      size: GPT_IMAGE_SIZES[aspectRatio] || "1024x1024",
+      n: 1,
+    });
+    const b64 = data.data?.[0]?.b64_json;
+    return b64 ? b64.replace(/[\r\n\s]/g, "") : null;
+  }
+
   // Gemini image models via LiteLLM go through chat/completions with the image
   // modality — /v1/images/generations no las soporta. max_tokens tiene que ser
   // enorme o el PNG base64 llega truncado (sin chunk IEND).
-  const arHint = AR_HINTS[aspectRatio] || `${aspectRatio} aspect ratio`;
   const text = `${prompt}\n\nRender the image with ${arHint}.`;
   const content = referenceImageDataUrl
     ? [{ type: "image_url", image_url: { url: referenceImageDataUrl } }, { type: "text", text }]
     : text;
   const data = await callLLMChat({
-    model: IMAGE_MODEL,
+    model: modelId,
     messages: [{ role: "user", content }],
     modalities: ["image", "text"],
     max_tokens: 32768,
@@ -1288,6 +1349,33 @@ function TextModelSelect() {
       </select>
       <div style={{ fontSize: 11, color: T.textLight, marginTop: 6 }}>
         Se usa para investigar los cursos, generar los copys y los prompts de imagen.
+      </div>
+    </div>
+  );
+}
+
+// Selector del modelo de imagen — como el de texto, la elección se guarda en
+// localStorage y aplica globalmente vía getImageModel(). Solo afecta al modo
+// "Rápido" (LiteLLM); el modo Batch usa siempre el modelo Gemini del server.
+function ImageModelSelect() {
+  const T = useTheme();
+  const [model, setModel] = useState(getImageModel());
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Modelo de imagen</label>
+      <select
+        value={model}
+        onChange={e => { setModel(e.target.value); setImageModel(e.target.value); }}
+        style={{
+          width: "100%", fontSize: 13, color: T.text, background: T.card,
+          border: `1px solid ${T.cardBorder}`, borderRadius: 10,
+          padding: "10px 12px", cursor: "pointer",
+        }}
+      >
+        {IMAGE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+      </select>
+      <div style={{ fontSize: 11, color: T.textLight, marginTop: 6 }}>
+        Solo aplica al modo «Rápido». El modo Batch usa siempre Gemini.
       </div>
     </div>
   );
@@ -2283,6 +2371,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       </div>
 
       <TextModelSelect />
+      <ImageModelSelect />
       <ImageModeSelect />
 
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
