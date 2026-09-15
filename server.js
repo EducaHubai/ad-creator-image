@@ -4,7 +4,7 @@
 // variables son de runtime: rotarlas en Coolify no requiere rebuild.
 //
 // Env: LITELLM_API_KEY, LITELLM_BASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY,
-//      SUPABASE_TABLE_PREFIX (default "ad_creator_" — el Supabase es compartido),
+//      SUPABASE_SCHEMA (OBLIGATORIA, sin default — el Supabase es compartido),
 //      APP_USER + APP_PASSWORD (Basic Auth, opcional pero recomendado), PORT.
 // El Supabase self-hosted (supabase-api.educahub.ai) sirve un certificado que
 // no pasa verificación — sin esto, todos los fetch salientes fallan con
@@ -37,12 +37,22 @@ const GEMINI_BATCH_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 const GEMINI_BATCH_IMAGE_MODEL = "gemini-3-pro-image-preview";
 
 // El Supabase es una instancia compartida entre apps: las tablas de esta app
-// viven con prefijo (ad_creator_brands, ad_creator_batches, ad_creator_creatives).
-const TABLE_PREFIX = (process.env.SUPABASE_TABLE_PREFIX ?? "ad_creator_").trim();
-const table = name => `${TABLE_PREFIX}${name}`;
+// viven en un schema propio, no en el `public` compartido. SUPABASE_SCHEMA es
+// OBLIGATORIA y SIN valor por defecto: preferimos fallar al arrancar antes que
+// caer silenciosamente sobre el schema equivocado. Requisito de infra: el schema
+// debe estar en PGRST_DB_SCHEMAS del contenedor `rest` (ver supabase/migrations/0005).
+const SUPABASE_SCHEMA = (process.env.SUPABASE_SCHEMA ?? "").trim();
+// Dentro del schema las tablas ya no llevan prefijo — el helper queda como
+// identidad para no tocar los call sites (y por si algún día vuelve un prefijo).
+const table = name => name;
+
+// Fallo rápido: si Supabase está configurado, el schema es imprescindible.
+if (SUPABASE_URL && SUPABASE_SERVICE_KEY && !SUPABASE_SCHEMA) {
+  throw new Error("Falta SUPABASE_SCHEMA (obligatoria, sin valor por defecto). Defínela en el entorno del server.");
+}
 
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { db: { schema: SUPABASE_SCHEMA } })
   : null;
 
 if (!supabase) console.warn("⚠️  Supabase no configurado (SUPABASE_URL / SUPABASE_SERVICE_KEY) — persistencia desactivada.");
@@ -93,7 +103,9 @@ app.get("/api/supabase-ping", async (_req, res) => {
     try {
       const r = await fetch(url, {
         signal: AbortSignal.timeout(3000),
-        headers: { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}` },
+        // Accept-Profile: PostgREST lee de este schema en peticiones REST crudas
+        // (supabase-js lo pone solo vía db.schema; aquí el fetch es manual).
+        headers: { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`, "Accept-Profile": SUPABASE_SCHEMA },
       });
       results[url] = { status: r.status, body: (await r.text()).slice(0, 120) };
     } catch (e) {
@@ -102,18 +114,18 @@ app.get("/api/supabase-ping", async (_req, res) => {
   }
 
   // Inventario real: tablas expuestas por PostgREST (raíz OpenAPI) y buckets de
-  // Storage — para detectar de un vistazo desajustes de nombres como el del
-  // prefijo ad_creator_.
-  const inventory = { tablePrefix: TABLE_PREFIX, tables: null, columns: null, buckets: null };
+  // Storage — para detectar de un vistazo desajustes como que el schema
+  // ad_creator_image no esté en PGRST_DB_SCHEMAS (saldría "tabla no expuesta").
+  const inventory = { schema: SUPABASE_SCHEMA, tables: null, columns: null, buckets: null };
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/`, {
       signal: AbortSignal.timeout(3000),
-      headers: { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}` },
+      headers: { "apikey": SUPABASE_SERVICE_KEY, "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`, "Accept-Profile": SUPABASE_SCHEMA },
     });
     const spec = await r.json();
     inventory.tables = Object.keys(spec?.paths || {}).filter(p => p !== "/").map(p => p.slice(1)).sort();
     // Columnas reales de las tablas de esta app: detecta esquemas desalineados
-    // con las migraciones del repo (que siguen sin prefijo) sin acceso a psql.
+    // con las migraciones del repo sin necesidad de psql.
     const defs = spec?.definitions || {};
     inventory.columns = Object.fromEntries(["brands", "batches", "creatives"].map(t => [
       table(t),
