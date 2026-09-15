@@ -593,14 +593,23 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
   return `${authored}\n\n${NO_TEXT_IMAGE_RULE}`;
 }
 
-async function generateImage(prompt, aspectRatio) {
+// referenceImageDataUrl (optional): when given, the model edits/recreates
+// FROM that actual image instead of only a text description — Gemini image
+// models take image+text multimodal input, same shape as vision analysis.
+// Used by the replicate path to test exact-fidelity reproduction of the
+// uploaded creative rather than relying only on the derived text analysis.
+async function generateImage(prompt, aspectRatio, referenceImageDataUrl) {
   // Gemini image models via LiteLLM go through chat/completions with the image
   // modality — /v1/images/generations no las soporta. max_tokens tiene que ser
   // enorme o el PNG base64 llega truncado (sin chunk IEND).
   const arHint = AR_HINTS[aspectRatio] || `${aspectRatio} aspect ratio`;
+  const text = `${prompt}\n\nRender the image with ${arHint}.`;
+  const content = referenceImageDataUrl
+    ? [{ type: "image_url", image_url: { url: referenceImageDataUrl } }, { type: "text", text }]
+    : text;
   const data = await callLLMChat({
     model: IMAGE_MODEL,
-    messages: [{ role: "user", content: `${prompt}\n\nRender the image with ${arHint}.` }],
+    messages: [{ role: "user", content }],
     modalities: ["image", "text"],
     max_tokens: 32768,
   });
@@ -1678,6 +1687,20 @@ Cada una de las 5 direcciones debe ser claramente distinta de las otras (varía 
 function buildStyleVariantPrompt(direction, brand, course, keywords5) {
   const kw = (keywords5 || []).join(", ") || "formación online";
   const commonRules = brand.brandImageStyle || buildGenericImageRules(brand);
+
+  if (direction.id === "replicated") {
+    // La imagen de referencia real se manda además de este texto (ver
+    // generateImage's referenceImageDataUrl) — ese es el que hace el trabajo
+    // pesado de fidelidad; este texto solo aclara qué cambiar.
+    return `Usá la imagen adjunta como referencia EXACTA de diseño — recreá el mismo layout, composición, bloques de color, paleta y tratamiento fotográfico, tan fielmente como sea posible.
+
+Cambiá ÚNICAMENTE el sujeto fotográfico para que represente este curso: "${course.name}". Temas: ${kw}. No reutilices el sujeto/escena literal de la imagen de referencia — mismo estilo y composición, contenido fotográfico distinto.
+
+${direction.description ? `Contexto adicional del diseño de referencia: ${direction.description}\n\n` : ""}${commonRules}
+
+${NO_TEXT_IMAGE_RULE}`;
+  }
+
   return `Dirección "${direction.label}": ${direction.description}
 
 Curso: "${course.name}". Temas: ${kw}. El contenido fotográfico (personas, objetos, escena, acción) debe representar visualmente ESTE curso y estos temas específicamente — nunca reutilizar literalmente el sujeto/escena de otra referencia o curso anterior, aunque la composición y paleta se mantengan iguales.
@@ -1797,29 +1820,30 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
             </button>
           );
         })}
-        {/* Custom format */}
+        {/* Custom format — mismo estilo negro-seleccionado que los otros botones;
+            el input queda visible mientras se escribe, y un "+" confirma la
+            adición a la lista (igual look que sel=true arriba) una vez válido. */}
         {(() => {
           const typed = cfg.customDim.trim().length > 0;
           const parsed = parseCustomDim(cfg.customDim);
           const invalid = typed && !parsed;
           const hasCustom = !!parsed;
-          const accent = invalid ? "#963058" : T.accent;
+          const accent = "#963058";
           return (
-            <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.accent : invalid ? accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? "#EAF7F6" : T.card, textAlign: "left", transition: "all 0.15s" }}>
-              {/* Colores fijos: el fondo activo (#EAF7F6) es claro en ambos temas. */}
-              <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? "#2A7A73" : T.cardBorder}`, borderRadius: 3, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ fontSize: 9, color: hasCustom ? "#2A7A73" : T.textMuted, fontWeight: 700 }}>+</span>
+            <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.text : invalid ? accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? T.text : T.card, textAlign: "left", transition: "all 0.15s" }}>
+              <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? T.cream : T.cardBorder}`, borderRadius: 3, marginBottom: 8, opacity: hasCustom ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: 9, color: hasCustom ? T.cream : T.textMuted, fontWeight: 700 }}>+</span>
               </div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: hasCustom ? "#202020" : T.text, marginBottom: 5 }}>Personalizado</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: hasCustom ? T.cream : T.text, marginBottom: 5 }}>Personalizado</div>
               <input
                 value={cfg.customDim}
                 onChange={e => set("customDim", e.target.value)}
                 placeholder="1200×800"
                 onClick={e => e.stopPropagation()}
-                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${invalid ? accent : T.cardBorder}`, borderRadius: 5, background: hasCustom ? "#FFFFFF" : T.cream, fontSize: 10, color: hasCustom ? "#202020" : T.text, fontFamily: "monospace" }}
+                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${invalid ? accent : hasCustom ? T.cream : T.cardBorder}`, borderRadius: 5, background: hasCustom ? "rgba(255,255,255,0.12)" : T.cream, fontSize: 10, color: hasCustom ? T.cream : T.text, fontFamily: "monospace" }}
               />
               {parsed && (
-                <div style={{ fontSize: 9, color: "#2A7A73", marginTop: 4 }}>→ {parsed.w}×{parsed.h}px</div>
+                <div style={{ fontSize: 9, color: T.cream, opacity: 0.8, marginTop: 4 }}>añadido: {parsed.w}×{parsed.h}px</div>
               )}
               {invalid && (
                 <div style={{ fontSize: 9, color: accent, marginTop: 4 }}>Formato inválido — usá Anchoxalto, ej. 1200x800</div>
@@ -2739,6 +2763,10 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     // Image generation (requires a LiteLLM key)
     if (hasApiKey() && getImgMode() === "batch" && appConfig.hasBatchKey) {
       // ── Modo Batch: Google Batch API (50% más barato, asíncrono) ─────────
+      // NOTA: a diferencia del Modo Rápido, acá /api/batch/submit solo manda
+      // {prompt, aspectRatio} — no lleva la imagen de referencia real del
+      // camino "replicate" (generateImage's referenceImageDataUrl). Mientras
+      // se prueba esa fidelidad, usar Modo Rápido para el camino replicate.
       setPhase("imaging");
       const jobs = [];
       for (let i = pilotStartIdx; i < researched.length; i++) {
@@ -2856,7 +2884,11 @@ function BatchProcessor({ batch, brands, onUpdate }) {
             ? buildStyleVariantPrompt(winningDirection, brand, item, item.keywords5)
             : await generateImagePrompt(brand, item, item.research || {}, firstCopy);
           if (isCancelledRef.current) return;
-          const imageB64 = await generateImage(imagePrompt, primaryApiSize);
+          // replicate: manda la imagen de referencia real además del texto —
+          // batch.config.replicateImage ya viene stripped de lo persistido
+          // (persistableConfig), pero acá seguimos en memoria de la corrida actual.
+          const referenceImageDataUrl = isReplicatePath ? batch.config.replicateImage?.data : undefined;
+          const imageB64 = await generateImage(imagePrompt, primaryApiSize, referenceImageDataUrl);
           if (isCancelledRef.current) return;
           await compositeAndPersist(i, item, firstCopy, imagePrompt, imageB64);
         } catch (err) {
