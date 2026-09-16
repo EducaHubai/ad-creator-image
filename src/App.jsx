@@ -491,8 +491,17 @@ async function analyzeRefImages(refImages) {
 // nail down each dimension (photo type, where the title/logo sit, palette,
 // other elements) instead of a vague summary that tends to miss the layout
 // details needed to replicate it consistently across every course/format.
+const CORNERS = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
+const HEX_RE = /^#[0-9a-f]{6}$/i;
+
+// Devuelve { description, layout }: `description` es la prosa que ya se
+// mandaba al prompt de generación de imagen (fondo); `layout` son los datos
+// normalizados (esquina/color) que compositeAd usa para posicionar el texto
+// y el logo REALES — sin esto, el paso de composición ignoraba por completo
+// dónde estaba el título/logo en la referencia y siempre pintaba su propia
+// plantilla fija abajo-izquierda con los colores de marca.
 async function analyzeReferenceCreative(imageSrc) {
-  if (!imageSrc) return "";
+  if (!imageSrc) return { description: "", layout: null };
   const imageDataUrl = await srcToDataUrl(imageSrc);
   const raw = await callOpenAIVision(
     `You are a visual art director. Analyze this ad creative's design system and return ONLY valid JSON (no markdown, no preamble) with this exact shape:
@@ -500,8 +509,12 @@ async function analyzeReferenceCreative(imageSrc) {
   "photoType": "individual" | "group" | "product" | "other",
   "photoTypeDetail": "brief shot description — framing/crop, e.g. close-up upper body, wide full-body, flat-lay product",
   "titleZone": "where the title/headline block sits, e.g. 'top-left, on a solid dark band covering ~40% width'",
+  "titleCorner": "top-left" | "top-right" | "bottom-left" | "bottom-right",
   "logoZone": "where the logo sits, e.g. 'top-left corner, small, over the title band'",
+  "logoCorner": "top-left" | "top-right" | "bottom-left" | "bottom-right",
   "colorPalette": ["#hex or short color name", "..."],
+  "textColor": "#hex — the exact color of the title/body TEXT itself (not the background band behind it)",
+  "ctaColor": "#hex — background color of the CTA button/pill, if there is one (omit/empty if none)",
   "otherElements": [{"element": "short name, e.g. CTA pill / keyword tags / corner accent shape", "position": "where it sits"}],
   "photographicMood": "lighting/treatment/style only — warmth, contrast, depth of field, framing style"
 }
@@ -522,7 +535,7 @@ CRITICAL — two things you must NOT do:
     const otherElements = Array.isArray(d.otherElements)
       ? d.otherElements.map(e => `${e.element} (${e.position})`).join("; ")
       : "";
-    return [
+    const description = [
       d.photoType ? `Tipo de foto: ${d.photoType}${d.photoTypeDetail ? ` — ${d.photoTypeDetail}` : ""}.` : "",
       d.photographicMood ? `Tratamiento fotográfico: ${d.photographicMood}.` : "",
       d.titleZone ? `Zona reservada para el título (panel vacío, sin letras): ${d.titleZone}.` : "",
@@ -530,10 +543,17 @@ CRITICAL — two things you must NOT do:
       palette ? `Paleta: ${palette}.` : "",
       otherElements ? `Otros elementos (formas/paneles vacíos, sin texto): ${otherElements}.` : "",
     ].filter(Boolean).join(" ");
+    const layout = {
+      titleCorner: CORNERS.has(d.titleCorner) ? d.titleCorner : "bottom-left",
+      logoCorner: CORNERS.has(d.logoCorner) ? d.logoCorner : "bottom-right",
+      textColor: HEX_RE.test(d.textColor || "") ? d.textColor : null,
+      ctaColor: HEX_RE.test(d.ctaColor || "") ? d.ctaColor : null,
+    };
+    return { description, layout };
   } catch {
-    // Model didn't return valid JSON — fall back to the raw text as-is,
-    // still usable as a (less structured) description.
-    return raw.trim();
+    // Model didn't return valid JSON — fall back to the raw text as-is for
+    // the description; sin layout normalizado, compositeAd usa sus defaults.
+    return { description: raw.trim(), layout: null };
   }
 }
 
@@ -719,15 +739,23 @@ function imageMeanLuminance(img) {
   } catch { return null; }
 }
 
-async function compositeAd(imageB64, copy, brandConfig, width, height) {
+// layoutOverride (solo path replicate — ver analyzeReferenceCreative): fuerza
+// la posición/colores del bloque de texto y del logo a los de la referencia
+// subida, en vez de la plantilla fija abajo-izquierda con colores de marca.
+// undefined ⇒ comportamiento idéntico al de siempre (path scratch).
+async function compositeAd(imageB64, copy, brandConfig, width, height, layoutOverride) {
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   const ctx = canvas.getContext("2d");
 
-  // Brand colors
+  const titleCorner = layoutOverride?.titleCorner || "bottom-left";
+  const isTop = titleCorner.startsWith("top");
+  const isRight = titleCorner.endsWith("right");
+
+  // Brand colors — layoutOverride pisa los de marca cuando viene de la referencia.
   const colors = brandConfig.colors || {};
-  const textOverlay  = colors.text_on_overlay || "#ffffff";
-  const ctaBgColor   = colors.accent          || "#963058";
+  const textOverlay  = layoutOverride?.textColor || colors.text_on_overlay || "#ffffff";
+  const ctaBgColor   = layoutOverride?.ctaColor   || colors.accent          || "#963058";
   const ctaFgColor   = colors.cta_text        || "#FFFFFF";
 
   // Background image — "cover" fit: scale proportionally to fill the canvas
@@ -827,30 +855,49 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   const ctaStr = copy.cta || "";
   const ctaBlockH = ctaStr ? ctaSize * 1.2 + ctaBoxH : 0;
 
-  // El bloque arranca en 0.58h como antes, pero sube lo que haga falta para
-  // que headline + body + CTA quepan enteros sobre el margen inferior.
-  const hlStartY = Math.max(height * 0.34, Math.min(height * 0.58, height - pad - (hlH + bdBlockH + ctaBlockH)));
+  // El bloque arranca en 0.58h como antes (o pegado arriba si titleCorner
+  // dice "top-*"), pero sube/baja lo que haga falta para que headline + body
+  // + CTA quepan enteros sobre el margen correspondiente.
+  const totalBlockH = hlH + bdBlockH + ctaBlockH;
+  const hlStartY = isTop
+    ? pad
+    : Math.max(height * 0.34, Math.min(height * 0.58, height - pad - totalBlockH));
 
-  // Bottom gradient — arranca siempre por encima del texto para que siga
-  // siendo legible aunque el bloque haya subido.
-  const gradTop = Math.min(height * 0.33, hlStartY - hl.size * 1.5);
-  const grad = ctx.createLinearGradient(0, gradTop, 0, height);
-  grad.addColorStop(0, "rgba(0,0,0,0)");
-  grad.addColorStop(1, "rgba(0,0,0,0.85)");
+  // Gradiente de contraste — del lado del texto (abajo por default, arriba si
+  // titleCorner es "top-*"), para que el texto siga siendo legible.
+  let grad;
+  if (isTop) {
+    const gradBottom = Math.max(height * 0.67, hlStartY + totalBlockH + hl.size * 1.5);
+    grad = ctx.createLinearGradient(0, 0, 0, gradBottom);
+    grad.addColorStop(0, "rgba(0,0,0,0.85)");
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+  } else {
+    const gradTop = Math.min(height * 0.33, hlStartY - hl.size * 1.5);
+    grad = ctx.createLinearGradient(0, gradTop, 0, height);
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(1, "rgba(0,0,0,0.85)");
+  }
   ctx.fillStyle = grad; ctx.fillRect(0, 0, width, height);
 
-  // Headline
+  // Headline — alineado a la izquierda por default, a la derecha si
+  // titleCorner termina en "-right" (cada línea se mide y ancla por separado).
   ctx.shadowColor = "rgba(0,0,0,0.65)"; ctx.shadowBlur = 12;
   ctx.font = `bold ${hl.size}px ${displayFont}`; ctx.fillStyle = textOverlay;
   let textY = hlStartY;
-  for (const line of hl.lines) { ctx.fillText(line, pad, textY); textY += hlLineH; }
+  for (const line of hl.lines) {
+    const x = isRight ? width - pad - ctx.measureText(line).width : pad;
+    ctx.fillText(line, x, textY); textY += hlLineH;
+  }
   const hlEndY = textY;
 
   // Body
   ctx.font = `${bd.size}px ${bodyFontFam}`; ctx.fillStyle = `${textOverlay}dd`; ctx.shadowBlur = 6;
   const bdStartY = hlEndY + hl.size * 0.5;
   textY = bdStartY;
-  for (const line of bd.lines) { ctx.fillText(line, pad, textY); textY += bdLineH; }
+  for (const line of bd.lines) {
+    const x = isRight ? width - pad - ctx.measureText(line).width : pad;
+    ctx.fillText(line, x, textY); textY += bdLineH;
+  }
   const bdEndY = textY;
 
   // CTA pill
@@ -858,15 +905,18 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   ctx.font = `bold ${ctaSize}px ${bodyFontFam}`;
   const ctaTextW = ctx.measureText(ctaStr).width;
   const ctaBoxW = ctaTextW + ctaPadX * 2;
-  const ctaBoxY = Math.min(bdEndY + ctaSize * 1.2, height - ctaBoxH - pad);
+  const ctaBoxX = isRight ? width - pad - ctaBoxW : pad;
+  const ctaBoxY = isTop
+    ? bdEndY + ctaSize * 1.2
+    : Math.min(bdEndY + ctaSize * 1.2, height - ctaBoxH - pad);
   if (ctaStr) {
     ctx.fillStyle = ctaBgColor;
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(pad, ctaBoxY, ctaBoxW, ctaBoxH, ctaBoxH / 2);
-    else ctx.rect(pad, ctaBoxY, ctaBoxW, ctaBoxH);
+    if (ctx.roundRect) ctx.roundRect(ctaBoxX, ctaBoxY, ctaBoxW, ctaBoxH, ctaBoxH / 2);
+    else ctx.rect(ctaBoxX, ctaBoxY, ctaBoxW, ctaBoxH);
     ctx.fill();
     ctx.fillStyle = ctaFgColor;
-    ctx.fillText(ctaStr, pad + ctaPadX, ctaBoxY + ctaPadY);
+    ctx.fillText(ctaStr, ctaBoxX + ctaPadX, ctaBoxY + ctaPadY);
   }
 
   // Logo overlay — pick white/dark version by sampling mean luminance under the
@@ -881,7 +931,7 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
     if (refLogoImg) {
       const lh = Math.round(height * 0.042);
       const margin = Math.round(width * 0.055);
-      const placement = brandConfig.adRules?.logoPlacement || "bottom-right";
+      const placement = layoutOverride?.logoCorner || brandConfig.adRules?.logoPlacement || "bottom-right";
       const refLw = Math.round(refLogoImg.naturalWidth * lh / Math.max(refLogoImg.naturalHeight, 1));
       const ly = placement.includes("top") ? margin : height - lh - margin;
 
@@ -930,7 +980,7 @@ async function compositeAd(imageB64, copy, brandConfig, width, height) {
   const qaIssues = qaCheckComposite([
     { label: "headline", x: pad,   y: hlStartY, w: width - pad * 2, h: Math.max(0, hlEndY - hlStartY) },
     { label: "body",     x: pad,   y: bdStartY, w: width - pad * 2, h: Math.max(0, bdEndY - bdStartY) },
-    { label: "cta",      x: pad,   y: ctaBoxY,  w: ctaBoxW,          h: ctaBoxH },
+    { label: "cta",      x: ctaBoxX, y: ctaBoxY, w: ctaBoxW,         h: ctaBoxH },
   ], width, height);
 
   return { dataUrl: canvas.toDataURL("image/png"), qaIssues };
@@ -2047,9 +2097,14 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       // se replica tal cual en cada curso (BatchProcessor lo detecta via
       // config.path === "replicate" y arranca con winningDirection ya fijado).
       let replicateStyleDescriptor = "";
-      try { replicateStyleDescriptor = await analyzeReferenceCreative(cfg.replicateImage?.data); }
-      catch (err) { console.warn("No se pudo analizar la creatividad de referencia:", err.message); }
+      let replicateLayout = null;
+      try {
+        const analysis = await analyzeReferenceCreative(cfg.replicateImage?.data);
+        replicateStyleDescriptor = analysis.description;
+        replicateLayout = analysis.layout;
+      } catch (err) { console.warn("No se pudo analizar la creatividad de referencia:", err.message); }
       extraConfig.replicateStyleDescriptor = replicateStyleDescriptor;
+      extraConfig.replicateLayout = replicateLayout;
     } else {
       // Referencias visuales del lote (si las hay) se resumen una sola vez acá,
       // en un descriptor de texto que guía las 5 direcciones del piloto —
@@ -2863,8 +2918,9 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     async function compositeAndPersist(i, item, firstCopy, imagePrompt, imageB64) {
       const composited = {};
       const qaIssues = {};
+      const layoutOverride = isReplicatePath ? batch.config.replicateLayout : undefined;
       for (const fmt of formatList) {
-        const result = await compositeAd(imageB64, firstCopy, brand, fmt.w, fmt.h);
+        const result = await compositeAd(imageB64, firstCopy, brand, fmt.w, fmt.h, layoutOverride);
         composited[fmt.key] = result.dataUrl;
         qaIssues[fmt.key] = result.qaIssues;
         setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging", composited: { ...composited } } : it));
