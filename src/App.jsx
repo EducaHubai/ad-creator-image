@@ -385,7 +385,7 @@ async function researchCourse(courseData, url) {
 async function generateAdCopy(brandConfig, campaignConfig, courseData, research) {
   const allFormats = [
     ...(campaignConfig.formats || []),
-    ...(campaignConfig.customDim ? [`custom_${campaignConfig.customDim}`] : []),
+    ...(campaignConfig.customDims || []).map(d => `custom_${d}`),
   ];
   // Goal/audience/painPoints/ctas are all optional in the wizard — when
   // skipped, tell the model to infer sensible ones from the course itself
@@ -412,7 +412,7 @@ Variants requested: ${campaignConfig.variantCount || 1}
 ## COPY INSTRUCTIONS
 Write copy that directly addresses the pain points and speaks to the target audience.
 Adapt tone and register for the stated audience segments.
-${campaignConfig.customDim ? `Custom format ${campaignConfig.customDim} — ensure copy fits non-standard dimensions.` : ""}
+${campaignConfig.customDims?.length ? `Custom formats ${campaignConfig.customDims.join(", ")} — ensure copy fits non-standard dimensions.` : ""}
 
 Return ONLY valid JSON: {"headline":"...","body":"...","benefit1":"...","benefit2":"...","cta":"...","painPoint":"..."}`;
 
@@ -1875,6 +1875,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     courses: [],
     variantCount: 1,
     customDim: "",
+    customDims: [],
     refImages: [],
     replicateImage: null,
   });
@@ -1908,30 +1909,60 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
             </button>
           );
         })}
-        {/* Custom format — mismo estilo negro-seleccionado que los otros botones;
-            el input queda visible mientras se escribe, y un "+" confirma la
-            adición a la lista (igual look que sel=true arriba) una vez válido. */}
+        {/* Custom formats — cada tamaño agregado es su propio chip, mismo
+            estilo negro-seleccionado que los botones estándar. La card con
+            "+" es solo la adición: escribir, Enter o click en "+" lo suma a
+            la lista; se pueden agregar varios tamaños custom distintos. */}
+        {cfg.customDims.map(d => (
+          <div key={d} style={{ padding: 12, border: `1.5px solid ${T.text}`, borderRadius: 12, background: T.text, textAlign: "left", position: "relative" }}>
+            <button
+              onClick={() => set("customDims", cfg.customDims.filter(x => x !== d))}
+              title="Quitar"
+              style={{ position: "absolute", top: 6, right: 6, width: 16, height: 16, borderRadius: "50%", border: "none", background: "rgba(255,255,255,0.2)", color: T.cream, fontSize: 10, lineHeight: "16px", cursor: "pointer", padding: 0 }}
+            >×</button>
+            <div style={{ width: 28, height: 20, border: `1.5px solid ${T.cream}`, borderRadius: 3, marginBottom: 8, opacity: 0.6 }} />
+            <div style={{ fontSize: 11, fontWeight: 600, color: T.cream, marginBottom: 2 }}>Personalizado</div>
+            <div style={{ fontSize: 10, color: T.cream, opacity: 0.8, fontFamily: "monospace" }}>{d}</div>
+          </div>
+        ))}
         {(() => {
           const typed = cfg.customDim.trim().length > 0;
           const parsed = parseCustomDim(cfg.customDim);
           const invalid = typed && !parsed;
-          const hasCustom = !!parsed;
+          const normalized = parsed ? `${parsed.w}x${parsed.h}` : null;
+          const dup = normalized && cfg.customDims.includes(normalized);
           const accent = "#963058";
+          const canAdd = !!parsed && !dup;
+
+          function addCustomDim() {
+            if (!canAdd) return;
+            setCfg(p => ({ ...p, customDims: [...p.customDims, normalized], customDim: "" }));
+          }
+
           return (
-            <div style={{ padding: 12, border: `1.5px solid ${hasCustom ? T.text : invalid ? accent : T.cardBorder}`, borderRadius: 12, background: hasCustom ? T.text : T.card, textAlign: "left", transition: "all 0.15s" }}>
-              <div style={{ width: 28, height: 20, border: `1.5px dashed ${hasCustom ? T.cream : T.cardBorder}`, borderRadius: 3, marginBottom: 8, opacity: hasCustom ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ fontSize: 9, color: hasCustom ? T.cream : T.textMuted, fontWeight: 700 }}>+</span>
+            <div style={{ padding: 12, border: `1.5px solid ${invalid ? accent : T.cardBorder}`, borderRadius: 12, background: T.card, textAlign: "left", transition: "all 0.15s" }}>
+              <div style={{ width: 28, height: 20, border: `1.5px dashed ${T.cardBorder}`, borderRadius: 3, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: 9, color: T.textMuted, fontWeight: 700 }}>+</span>
               </div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: hasCustom ? T.cream : T.text, marginBottom: 5 }}>Personalizado</div>
-              <input
-                value={cfg.customDim}
-                onChange={e => set("customDim", e.target.value)}
-                placeholder="1200×800"
-                onClick={e => e.stopPropagation()}
-                style={{ width: "100%", padding: "3px 6px", border: `1px solid ${invalid ? accent : hasCustom ? T.cream : T.cardBorder}`, borderRadius: 5, background: hasCustom ? "rgba(255,255,255,0.12)" : T.cream, fontSize: 10, color: hasCustom ? T.cream : T.text, fontFamily: "monospace" }}
-              />
-              {parsed && (
-                <div style={{ fontSize: 9, color: T.cream, opacity: 0.8, marginTop: 4 }}>añadido: {parsed.w}×{parsed.h}px</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: T.text, marginBottom: 5 }}>Personalizado</div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <input
+                  value={cfg.customDim}
+                  onChange={e => set("customDim", e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCustomDim(); } }}
+                  placeholder="1200×800"
+                  onClick={e => e.stopPropagation()}
+                  style={{ flex: 1, minWidth: 0, padding: "3px 6px", border: `1px solid ${invalid ? accent : T.cardBorder}`, borderRadius: 5, background: T.cream, fontSize: 10, color: T.text, fontFamily: "monospace" }}
+                />
+                <button
+                  onClick={addCustomDim}
+                  disabled={!canAdd}
+                  title="Agregar tamaño"
+                  style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: canAdd ? T.text : T.cardBorder, color: T.cream, fontSize: 13, fontWeight: 700, cursor: canAdd ? "pointer" : "not-allowed", flexShrink: 0 }}
+                >+</button>
+              </div>
+              {dup && (
+                <div style={{ fontSize: 9, color: T.textMuted, marginTop: 4 }}>Ya está en la lista</div>
               )}
               {invalid && (
                 <div style={{ fontSize: 9, color: accent, marginTop: 4 }}>Formato inválido — usá Anchoxalto, ej. 1200x800</div>
@@ -1989,8 +2020,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
 
   // A custom size only counts once it actually parses — typing garbage
   // used to silently fall back to a 1080×1080 default at generation time.
-  const hasValidCustomDim = !!parseCustomDim(cfg.customDim);
-  const hasFormats = cfg.formats.length > 0 || hasValidCustomDim;
+  const hasFormats = cfg.formats.length > 0 || cfg.customDims.length > 0;
   const usePilotFlowEstimate = path !== "replicate" && hasApiKey() && cfg.courses.length > 0 && cfg.courses.some(c => c.keywords5?.length);
   const { imagesEstimate, costEstimate } = estimateBatchCost(cfg.courses.length, usePilotFlowEstimate);
   const [showCostConfirm, setShowCostConfirm] = useState(false);
@@ -2042,7 +2072,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     onBatchCreated(batch);
     setLaunching(false);
     setStep(0);
-    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", refImages: [], replicateImage: null });
+    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", customDims: [], refImages: [], replicateImage: null });
   }
 
   // Paso: Marca + Objetivo — shared by both paths.
@@ -2359,8 +2389,8 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
                 ["Puntos de dolor", cfg.painPoints.join(" · ") || "—"],
                 ["CTAs", cfg.ctas.join(" / ") || "—"],
               ]),
-          ["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...(hasValidCustomDim ? [`Custom ${cfg.customDim}`] : [])].join(", ")],
-          ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + (hasValidCustomDim ? 1 : 0))} anuncios`],
+          ["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...cfg.customDims.map(d => `Custom ${d}`)].join(", ")],
+          ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + cfg.customDims.length)} anuncios`],
           ...(cfg.refImages.length ? [["Referencias visuales", `${cfg.refImages.length} imagen(es)`]] : []),
         ].map(([k, v], i, arr) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "12px 20px", borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
@@ -2376,7 +2406,7 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
 
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + (hasValidCustomDim ? 1 : 0)) * cfg.variantCount} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + cfg.customDims.length) * cfg.variantCount} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
           <div style={{ fontSize: 11, color: T.white, opacity: 0.75 }}>La IA investigará cada URL y generará copy + prompts de imagen</div>
         </div>
         <button onClick={() => setShowCostConfirm(true)} disabled={launching} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap", opacity: launching ? 0.7 : 1, cursor: launching ? "wait" : "pointer" }}>
@@ -2657,10 +2687,10 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     const selectedFormats = batch.config.formats || [];
     // Only a genuinely parseable custom size counts — leftover invalid text
     // (e.g. "abc") must never silently become a phantom 1080×1080 format.
-    const customDim = parseCustomDim(batch.config.customDim) ? batch.config.customDim : null;
+    const customDims = (batch.config.customDims || []).filter(d => parseCustomDim(d));
     const formatList = [
       ...selectedFormats.map(fid => ({ key: fid, ...(FORMAT_SIZES[fid] || { w: 1080, h: 1080, api: "1024x1024" }) })),
-      ...(customDim ? [{ key: customDim, ...customDimToSize(customDim) }] : []),
+      ...customDims.map(d => ({ key: d, ...customDimToSize(d) })),
     ];
     const primaryApiSize = formatList[0]?.api || "1:1";
 
@@ -2994,7 +3024,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     setCtrl("done");
     setPhase("done");
     setProgress(100);
-    const allFormats = [...(batch.config.formats || []), ...(customDim ? [customDim] : [])];
+    const allFormats = [...(batch.config.formats || []), ...customDims];
     const finalAdsCount = researched.length * allFormats.length * variantCount;
     onUpdate(batch.id, {
       status: "review",
@@ -3754,7 +3784,7 @@ async function exportBatchZip(batch, approvedKeys = null) {
 
   const allFormats = [
     ...(batch.config?.formats || []).map(f => FORMATS.find(x => x.id === f)?.label || f),
-    ...(parseCustomDim(batch.config?.customDim) ? [`Custom_${batch.config.customDim}`] : []),
+    ...(batch.config?.customDims || []).filter(d => parseCustomDim(d)).map(d => `Custom_${d}`),
   ];
 
   const escCSV = v => `"${String(v || "").replace(/"/g, '""')}"`;
