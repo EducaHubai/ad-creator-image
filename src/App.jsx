@@ -521,7 +521,7 @@ async function analyzeReferenceCreative(imageSrc) {
 
 CRITICAL — two things you must NOT do:
 1. Do not describe the specific photographic subject (who/what is depicted — the actual people, objects, actions in the shot). That subject belongs to THIS reference only and must NOT carry over; the regenerated version needs its own subject matching a different course. photographicMood/photoTypeDetail describe STYLE only (e.g. "warm, soft-lit close-up lifestyle photography"), never literal content.
-2. Do not describe titleZone, logoZone, or any otherElements entry as containing rendered text/letters/typography — describe them purely as empty/reserved panels or shapes reserved for content added separately, in code, afterward. The regenerated image must never contain actual letters or words.`,
+2. titleZone/logoZone/otherElements are ONLY metadata for code to position text afterward — they are NEVER instructions to paint anything. Do not describe them as a solid box, panel, band, plate, or shape of any kind, and never suggest the regenerated image should contain a rectangle, empty frame, or color block standing in for them. The regenerated image must be a plain, uninterrupted photograph with no text, no letters, and no placeholder shapes anywhere.`,
     [
       { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
       { type: "text", text: "Analyze this creative's design system as the JSON schema described. No text/lettering in any zone description, no specific subject matter." },
@@ -538,14 +538,26 @@ CRITICAL — two things you must NOT do:
     const description = [
       d.photoType ? `Tipo de foto: ${d.photoType}${d.photoTypeDetail ? ` — ${d.photoTypeDetail}` : ""}.` : "",
       d.photographicMood ? `Tratamiento fotográfico: ${d.photographicMood}.` : "",
-      d.titleZone ? `Zona reservada para el título (panel vacío, sin letras): ${d.titleZone}.` : "",
-      d.logoZone ? `Zona reservada para el logo (vacía, sin logotipo real): ${d.logoZone}.` : "",
+      d.titleZone ? `Zona reservada para el título (NO pintar ninguna caja/panel/rectángulo ahí — mantenerla visualmente simple, sin sujeto principal, es solo espacio para texto agregado después por código): ${d.titleZone}.` : "",
+      d.logoZone ? `Zona reservada para el logo (NO pintar ninguna caja/forma ahí, mismo criterio): ${d.logoZone}.` : "",
       palette ? `Paleta: ${palette}.` : "",
-      otherElements ? `Otros elementos (formas/paneles vacíos, sin texto): ${otherElements}.` : "",
+      otherElements ? `Otros elementos de referencia (no pintarlos como formas/paneles — son solo metadata de posición): ${otherElements}.` : "",
     ].filter(Boolean).join(" ");
+    // El modelo no siempre devuelve titleCorner/logoCorner en el enum exacto —
+    // si falla, se infiere de las palabras de la zona en prosa (que sí suele
+    // acertar) antes de caer al default; evita el mismatch entre "la foto
+    // reserva arriba" (texto libre, va al prompt de imagen) y "el texto real
+    // se pinta abajo" (layout, va a compositeAd) que rompía el resultado.
+    function inferCorner(explicit, zoneText, fallback) {
+      if (CORNERS.has(explicit)) return explicit;
+      const t = String(zoneText || "").toLowerCase();
+      const vert = /top|upper/.test(t) ? "top" : /bottom|lower/.test(t) ? "bottom" : null;
+      const horiz = /right/.test(t) ? "right" : /left/.test(t) ? "left" : null;
+      return vert && horiz ? `${vert}-${horiz}` : fallback;
+    }
     const layout = {
-      titleCorner: CORNERS.has(d.titleCorner) ? d.titleCorner : "bottom-left",
-      logoCorner: CORNERS.has(d.logoCorner) ? d.logoCorner : "bottom-right",
+      titleCorner: inferCorner(d.titleCorner, d.titleZone, "bottom-left"),
+      logoCorner: inferCorner(d.logoCorner, d.logoZone, "bottom-right"),
       textColor: HEX_RE.test(d.textColor || "") ? d.textColor : null,
       ctaColor: HEX_RE.test(d.ctaColor || "") ? d.ctaColor : null,
     };
@@ -1781,7 +1793,12 @@ const FALLBACK_STYLE_VARIANTS = [
 // Repeated verbatim, last, in every image-generation prompt below — image
 // models otherwise regularly ignore a single mild "no text" instruction and
 // bake in fake headline/title mockups (observed in production output).
-const NO_TEXT_IMAGE_RULE = `REGLA ABSOLUTA E INNEGOCIABLE: la imagen NO debe contener NINGÚN texto, letra, palabra, número, logotipo ni tipografía de ningún tipo, en ningún idioma — ni siquiera como mockup, marca de agua, cartel de fondo, o texto ilegible/decorativo. Cualquier zona que en otro momento se describió como "bloque de título" o "área de texto" debe pintarse como un panel liso de color plano, completamente vacío, sin ningún carácter dentro. El titular, el copy y el logo se superponen aparte, después, por código — si la imagen generada contiene aunque sea una sola letra o palabra falsa, es un resultado inválido.`;
+// OJO: nunca decir "pintá un panel/caja vacía ahí" — el modelo lo toma literal
+// y hornea un rectángulo de color sólido en la foto (bug real, visto en
+// producción: caja negra + caja crema + barra rosa horneadas en la imagen).
+// La zona reservada para título/logo tiene que quedar como parte normal de
+// la fotografía, sin ninguna forma que la delate.
+const NO_TEXT_IMAGE_RULE = `REGLA ABSOLUTA E INNEGOCIABLE: la imagen NO debe contener NINGÚN texto, letra, palabra, número, logotipo ni tipografía de ningún tipo, en ningún idioma — ni siquiera como mockup, marca de agua, cartel de fondo, o texto ilegible/decorativo. Tampoco debe contener NINGUNA caja, panel, rectángulo, marco, placa ni bloque de color sólido simulando dónde iría el texto — eso también es un resultado inválido. Cualquier zona que en otro momento se describió como "bloque de título" o "área de texto" es SOLO una referencia de posición para código: en la imagen debe verse como parte normal y continua de la fotografía (sin sujeto principal ahí, nada más), jamás como una forma o silueta reconocible. El titular, el copy y el logo se superponen aparte, después, por código — si la imagen generada contiene aunque sea una sola letra, palabra, o caja/panel simulado, es un resultado inválido.`;
 
 function buildGenericImageRules(brand) {
   const colors = brand.colors || {};
