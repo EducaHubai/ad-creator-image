@@ -1854,7 +1854,9 @@ function buildStyleVariantPrompt(direction, brand, course, keywords5) {
     // solo compite con ella.
     return `Editá la imagen adjunta — no la recrees desde cero ni la reinterpretes. Cambiá ÚNICAMENTE el sujeto fotográfico (personas, objetos, escena) para que represente este curso: "${course.name}". Temas: ${kw}.
 
-Todo lo demás queda EXACTAMENTE igual a la imagen adjunta: mismo layout, misma composición, mismos bloques de color, misma paleta, mismo tratamiento fotográfico, mismo encuadre y mismas proporciones. No reutilices el sujeto/escena literal de la referencia — el contenido fotográfico debe ser distinto, pero el diseño alrededor no se toca.
+ÚNICA EXCEPCIÓN a "editar, no recrear": la imagen adjunta es un anuncio YA TERMINADO — probablemente tiene un título, texto y botón reales, ya dibujados como parte de la foto, de OTRO curso. Esas letras/palabras/botón específicos NO son parte del diseño a preservar — son contenido viejo que hay que descartar. No los copies, no los repitas, no los dejes "de fondo" ni reescritos. Tratá esa zona exactamente como si en la foto no hubiera nada dibujado ahí: una continuación limpia y vacía de la fotografía, sin ninguna letra vieja ni nueva, sin caja ni forma. El título, el texto y el botón de ESTA pieza se agregan aparte, después, por código, con contenido propio de este curso.
+
+Todo lo demás sí queda EXACTAMENTE igual a la imagen adjunta: mismo layout, misma composición, mismos bloques de color, misma paleta, mismo tratamiento fotográfico, mismo encuadre y mismas proporciones. No reutilices el sujeto/escena literal de la referencia — el contenido fotográfico debe ser distinto, pero el diseño alrededor no se toca.
 
 ${direction.description ? `Contexto de la referencia (zonas reservadas para título/logo, paleta, tratamiento) — usalo solo para no pisar esas zonas, no para cambiar el diseño: ${direction.description}\n\n` : ""}${NO_TEXT_IMAGE_RULE}`;
   }
