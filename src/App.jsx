@@ -1780,13 +1780,16 @@ function buildStyleVariantPrompt(direction, brand, course, keywords5) {
     // La imagen de referencia real se manda además de este texto (ver
     // generateImage's referenceImageDataUrl) — ese es el que hace el trabajo
     // pesado de fidelidad; este texto solo aclara qué cambiar.
-    return `Usá la imagen adjunta como referencia EXACTA de diseño — recreá el mismo layout, composición, bloques de color, paleta y tratamiento fotográfico, tan fielmente como sea posible.
+    // Framing de EDICIÓN estricta (no "recreá fielmente") — Google recomienda
+    // este patrón para fidelidad: nombrar el único cambio, fijar todo lo demás
+    // como inalterable. commonRules (estilo genérico de marca) queda afuera acá
+    // a propósito: la referencia real ya ES el estilo, sumar reglas genéricas
+    // solo compite con ella.
+    return `Editá la imagen adjunta — no la recrees desde cero ni la reinterpretes. Cambiá ÚNICAMENTE el sujeto fotográfico (personas, objetos, escena) para que represente este curso: "${course.name}". Temas: ${kw}.
 
-Cambiá ÚNICAMENTE el sujeto fotográfico para que represente este curso: "${course.name}". Temas: ${kw}. No reutilices el sujeto/escena literal de la imagen de referencia — mismo estilo y composición, contenido fotográfico distinto.
+Todo lo demás queda EXACTAMENTE igual a la imagen adjunta: mismo layout, misma composición, mismos bloques de color, misma paleta, mismo tratamiento fotográfico, mismo encuadre y mismas proporciones. No reutilices el sujeto/escena literal de la referencia — el contenido fotográfico debe ser distinto, pero el diseño alrededor no se toca.
 
-${direction.description ? `Contexto adicional del diseño de referencia: ${direction.description}\n\n` : ""}${commonRules}
-
-${NO_TEXT_IMAGE_RULE}`;
+${direction.description ? `Contexto de la referencia (zonas reservadas para título/logo, paleta, tratamiento) — usalo solo para no pisar esas zonas, no para cambiar el diseño: ${direction.description}\n\n` : ""}${NO_TEXT_IMAGE_RULE}`;
   }
 
   return `Dirección "${direction.label}": ${direction.description}
