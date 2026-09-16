@@ -1845,20 +1845,22 @@ function buildStyleVariantPrompt(direction, brand, course, keywords5) {
 
   if (direction.id === "replicated") {
     // La imagen de referencia real se manda además de este texto (ver
-    // generateImage's referenceImageDataUrl) — ese es el que hace el trabajo
-    // pesado de fidelidad; este texto solo aclara qué cambiar.
-    // Framing de EDICIÓN estricta (no "recreá fielmente") — Google recomienda
-    // este patrón para fidelidad: nombrar el único cambio, fijar todo lo demás
-    // como inalterable. commonRules (estilo genérico de marca) queda afuera acá
-    // a propósito: la referencia real ya ES el estilo, sumar reglas genéricas
-    // solo compite con ella.
-    return `Editá la imagen adjunta — no la recrees desde cero ni la reinterpretes. Cambiá ÚNICAMENTE el sujeto fotográfico (personas, objetos, escena) para que represente este curso: "${course.name}". Temas: ${kw}.
+    // generateImage's referenceImageDataUrl). Framing de "editar pixel-exacto"
+    // se probó y falló: la referencia es un anuncio YA TERMINADO con su propio
+    // texto/botón horneados en la foto, y pedir "todo igual" hacía que el
+    // modelo preservara también ese texto viejo. Agregar una excepción sobre
+    // eso lo rompió más (prompt largo, instrucciones que se pisan → el modelo
+    // ignoraba la referencia entera). Framing corto de "referencia de ESTILO,
+    // no copia literal" en su lugar — un solo mensaje claro, sin parches.
+    // commonRules (estilo genérico de marca) queda afuera: la referencia real
+    // ya ES el estilo, sumar reglas genéricas solo compite con ella.
+    return `Generá una foto publicitaria NUEVA para este curso: "${course.name}". Temas: ${kw}.
 
-ÚNICA EXCEPCIÓN a "editar, no recrear": la imagen adjunta es un anuncio YA TERMINADO — probablemente tiene un título, texto y botón reales, ya dibujados como parte de la foto, de OTRO curso. Esas letras/palabras/botón específicos NO son parte del diseño a preservar — son contenido viejo que hay que descartar. No los copies, no los repitas, no los dejes "de fondo" ni reescritos. Tratá esa zona exactamente como si en la foto no hubiera nada dibujado ahí: una continuación limpia y vacía de la fotografía, sin ninguna letra vieja ni nueva, sin caja ni forma. El título, el texto y el botón de ESTA pieza se agregan aparte, después, por código, con contenido propio de este curso.
+La imagen adjunta es el anuncio YA TERMINADO de otro curso (tiene su propio título, texto y botón dibujados). Usala solo como referencia de ESTILO — paleta de colores, iluminación, composición y encuadre — nunca como algo a copiar literalmente pixel por pixel.
 
-Todo lo demás sí queda EXACTAMENTE igual a la imagen adjunta: mismo layout, misma composición, mismos bloques de color, misma paleta, mismo tratamiento fotográfico, mismo encuadre y mismas proporciones. No reutilices el sujeto/escena literal de la referencia — el contenido fotográfico debe ser distinto, pero el diseño alrededor no se toca.
+La foto que generes debe: (1) verse en el mismo estilo fotográfico que la referencia, (2) mostrar un sujeto fotográfico propio de este curso — distinto al de la referencia, y (3) no contener el título/texto/botón de la referencia ni ningún otro texto (ver regla final).
 
-${direction.description ? `Contexto de la referencia (zonas reservadas para título/logo, paleta, tratamiento) — usalo solo para no pisar esas zonas, no para cambiar el diseño: ${direction.description}\n\n` : ""}${NO_TEXT_IMAGE_RULE}`;
+${direction.description ? `Contexto de estilo de la referencia (paleta, tratamiento, zonas reservadas para título/logo): ${direction.description}\n\n` : ""}${NO_TEXT_IMAGE_RULE}`;
   }
 
   return `Dirección "${direction.label}": ${direction.description}
