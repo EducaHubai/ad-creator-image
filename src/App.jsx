@@ -213,7 +213,7 @@ async function withRetry(fn, { maxAttempts = 4, baseDelay = 2000, label = "", on
       const httpStatus = parseInt((msg.match(/(?:LiteLLM|HTTP) (\d+)/) || [])[1]) || 0;
       const isBillingError = /billing account has exceeded|billing.*exceeded|exceeded.*billing/i.test(msg);
       const is429 = !isBillingError && (httpStatus === 429 || /RESOURCE_EXHAUSTED|quota.*exceeded|rate.limit.*exceeded/i.test(msg));
-      const isRetryable = is429 || httpStatus === 503 || httpStatus === 500 || /UNAVAILABLE|overloaded/i.test(msg);
+      const isRetryable = is429 || httpStatus === 503 || httpStatus === 500 || /UNAVAILABLE|overloaded|timeout/i.test(msg);
       if (!isRetryable || attempt === maxAttempts) throw e;
       const delay = is429 ? 60000 + Math.random() * 5000 : baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
       console.warn(`[retry ${attempt}/${maxAttempts}] ${label} — esperando ${Math.round(delay / 1000)}s…`, msg.slice(0, 80));
@@ -223,13 +223,30 @@ async function withRetry(fn, { maxAttempts = 4, baseDelay = 2000, label = "", on
   }
 }
 
-async function callLLMChat(body) {
+// fetch() no tiene timeout propio — si LiteLLM/el modelo se cuelga (más
+// probable con requests pesados, p. ej. imagen de referencia inline en
+// base64) el browser esperaba PARA SIEMPRE, sin error ni resolución, y el
+// lote quedaba "trabado" sin ningún aviso. AbortController fuerza un límite.
+async function fetchWithTimeout(url, opts, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`LiteLLM timeout: sin respuesta tras ${Math.round(timeoutMs / 1000)}s`, { cause: e });
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function callLLMChat(body, { timeoutMs = 120000 } = {}) {
   return withRetry(async () => {
-    const res = await fetch("/api/llm/chat", {
+    const res = await fetchWithTimeout("/api/llm/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, timeoutMs);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
@@ -240,13 +257,13 @@ async function callLLMChat(body) {
 
 // Igual que callLLMChat pero contra la Images API (para gpt-image-1 y demás
 // modelos de imagen de OpenAI, que no pasan por chat/completions).
-async function callLLMImages(body) {
+async function callLLMImages(body, { timeoutMs = 120000 } = {}) {
   return withRetry(async () => {
-    const res = await fetch("/api/llm/images", {
+    const res = await fetchWithTimeout("/api/llm/images", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, timeoutMs);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(`LiteLLM ${res.status}: ${err.error?.message || "request failed"}`);
