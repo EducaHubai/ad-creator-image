@@ -7,7 +7,7 @@ async function loadFontFace(name, src) {
   } catch { return false; }
 }
 
-function loadImage(src) {
+export function loadImage(src) {
   return new Promise(resolve => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -297,4 +297,35 @@ function qaCheckComposite(boxes, width, height) {
     if (box.x < safeMargin || box.x + box.w > width - safeMargin) issues.push({ type: "margin", label: box.label });
   }
   return issues;
+}
+
+// Misma carga de fuentes de marca que hace compositeAd, expuesta para el
+// camino de plantilla (renderTemplate). compositeAd no la usa a propósito:
+// los caminos scratch/replicate quedan intactos.
+export async function loadBrandFonts(brandConfig) {
+  const displayFontName = "BrandDisplay_" + (brandConfig.id || "x");
+  const bodyFontName    = "BrandBody_"    + (brandConfig.id || "x");
+  let displayFont = `"${brandConfig.fonts?.display || "system-ui"}", system-ui, sans-serif`;
+  let bodyFontFam = `"${brandConfig.fonts?.body    || "system-ui"}", system-ui, sans-serif`;
+
+  const fontServerBase = brandConfig.fontServerUrl?.replace(/\/$/, "") || "";
+  const displaySrc = brandConfig.fontData?.displayData
+    || (fontServerBase && brandConfig.fontData?.displayFile ? `${fontServerBase}/${brandConfig.fontData.displayFile}` : null);
+  const bodySrc = brandConfig.fontData?.bodyData
+    || (fontServerBase && brandConfig.fontData?.bodyFile ? `${fontServerBase}/${brandConfig.fontData.bodyFile}` : null);
+
+  if (displaySrc && await loadFontFace(displayFontName, displaySrc))
+    displayFont = `"${displayFontName}", system-ui, sans-serif`;
+  if (bodySrc && await loadFontFace(bodyFontName, bodySrc))
+    bodyFontFam = `"${bodyFontName}", system-ui, sans-serif`;
+
+  try {
+    await Promise.all([
+      document.fonts.load(`700 16px ${displayFont}`),
+      document.fonts.load(`400 16px ${bodyFontFam}`),
+      document.fonts.load(`700 16px ${bodyFontFam}`),
+    ]);
+  } catch { /* best effort — falls back to system font */ }
+
+  return { display: displayFont, body: bodyFontFam };
 }

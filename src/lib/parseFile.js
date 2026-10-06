@@ -76,3 +76,49 @@ export async function parseFile(file) {
   }
   return [];
 }
+
+// Tabla genérica para el camino de plantilla: todas las columnas tal cual,
+// cada fila como { [header]: valor }. A diferencia de parseCSV respeta campos
+// entre comillas (con delimitadores y saltos de línea dentro).
+function splitCSV(text, delim) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else field += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === delim) { row.push(field); field = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += ch;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function toTable(matrix) {
+  const header = (matrix[0] || []).map((h, i) => String(h ?? "").trim() || `Columna ${i + 1}`);
+  const rows = matrix.slice(1)
+    .map(cells => Object.fromEntries(header.map((h, i) => [h, String(cells[i] ?? "").trim()])))
+    .filter(r => Object.values(r).some(Boolean));
+  return { headers: header, rows };
+}
+
+export async function parseTable(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+  if (ext === "csv" || ext === "tsv" || ext === "txt") {
+    const text = (await file.text()).replace(/^\uFEFF/, "");
+    const firstLine = text.split(/\r?\n/)[0] || "";
+    const delim = ext === "tsv" || firstLine.includes("\t") ? "\t" : detectDelimiter(firstLine);
+    return toTable(splitCSV(text.trim(), delim));
+  }
+  if (ext === "xlsx" || ext === "xls" || ext === "ods") {
+    const { default: readXlsxFile } = await import("read-excel-file/browser");
+    return toTable(await readXlsxFile(file));
+  }
+  return { headers: [], rows: [] };
+}

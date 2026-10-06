@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { CodeChip, ExpandBtn, Lightbox } from "../components/ui.jsx";
 import { readBatchResults } from "../lib/batchResults.js";
 import { DEFAULT_BRANDS, isUuid } from "../lib/brands.js";
-import { compositeAd } from "../lib/composite.js";
+import { compositeAd, loadImage } from "../lib/composite.js";
 import { generateAdCopy, researchCourse } from "../lib/copywriting.js";
 import { FORMAT_SIZES, customDimToSize, parseCustomDim } from "../lib/formats.js";
 import { generateImage, generateImagePrompt, openaiSizeForAr } from "../lib/imageGen.js";
 import { hasApiKey } from "../lib/llm.js";
 import { IMG_DELAY_MS, batchAvailableFor, getImageModel, getImgMode } from "../lib/models.js";
+import { renderTemplateRow, resolveTemplate } from "../lib/templatePipeline.js";
 import { FALLBACK_STYLE_VARIANTS, buildStyleVariantPrompt, generateStyleDirections } from "../lib/styleDirections.js";
 import { BUCKETS, createBatch, fetchBatch, fetchCreatives, getSignedUrl, insertCreative, updateBatch, uploadFile } from "../lib/supabase";
 import { useTheme } from "../theme/tokens.js";
@@ -51,12 +52,15 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
   // necesita al retomar (replicateStyleDescriptor, refImageDescriptor,
   // winningDirection) sí se conservan; courses vive en su columna propia.
   function persistableConfig(config = {}) {
-    const { replicateImage, refImages, csvText, courses, ...rest } = config;
+    const { replicateImage, refImages, csvText, courses, template, ...rest } = config;
     void csvText; void courses;
     return {
       ...rest,
       replicateImage: replicateImage ? { name: replicateImage.name } : null,
       refImagesCount: refImages?.length || 0,
+      // La plantilla viaja sin la referencia embebida (data URL de MBs): se
+      // recupera de storage vía referencePath al retomar.
+      ...(template ? { template: { ...template, referenceData: undefined } } : {}),
     };
   }
 
@@ -239,7 +243,57 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runKey]);
 
+  // Camino plantilla (replicate v2): sin investigación ni copy por IA — los
+  // textos salen del CSV; por fila solo se genera la foto y se renderiza.
+  async function runTemplatePipeline() {
+    const courses = batch.config.courses || [];
+    const total = courses.length;
+    const template = await resolveTemplate(batch.config.template);
+    const referenceImg = await loadImage(template.referenceData);
+    if (!referenceImg) throw new Error("No se pudo cargar la imagen de referencia de la plantilla");
+    const fmtKey = `${template.width}x${template.height}`;
+    const fmt = { w: template.width, h: template.height };
+    const generatePhoto = hasApiKey();
+
+    await persistBatchStart();
+    const resume = resumeStateRef.current;
+    const results = [];
+    setPhase("imaging");
+    for (let i = 0; i < total; i++) {
+      await waitIfPaused();
+      if (isCancelledRef.current) return;
+      if (resume?.doneIndices.has(i)) {
+        results[i] = { ...courses[i], ...resume.byCourseIndex[i] };
+        setItems(prev => [...prev, results[i]]);
+        setProgress(Math.round(((i + 1) / total) * 100));
+        continue;
+      }
+      const c = courses[i];
+      setItems(prev => [...prev, { ...c, status: "imaging" }]);
+      try {
+        const r = await renderTemplateRow(template, c.row || {}, { brand, referenceImg, generatePhoto });
+        if (isCancelledRef.current) return;
+        results[i] = { ...c, status: "imaged", copies: [r.copy], imagePrompt: r.imagePrompt, composited: { [fmtKey]: r.dataUrl }, qaIssues: { [fmtKey]: r.qaIssues } };
+        persistCreative(i, results[i], r.copy, r.imagePrompt, fmtKey, fmt, r.dataUrl);
+        persistBatchProgress(i);
+      } catch (err) {
+        results[i] = { ...c, status: "imageFailed", imageError: err.message };
+      }
+      setItems(prev => prev.map((it, idx) => idx === i ? results[i] : it));
+      setProgress(Math.round(((i + 1) / total) * 100));
+      if (generatePhoto && i < total - 1) await new Promise(r => setTimeout(r, IMG_DELAY_MS));
+    }
+
+    setCtrl("done");
+    setPhase("done");
+    setProgress(100);
+    const finalAdsCount = results.filter(r => r?.status === "imaged").length;
+    onUpdate(batch.id, { status: "review", adsCount: finalAdsCount, items: results });
+    persistBatchEnd("done", { ads_count: finalAdsCount });
+  }
+
   async function runPipeline() {
+    if (batch.config.path === "template") return runTemplatePipeline();
     const courses = batch.config.courses || [];
     const total = courses.length;
     const researched = [];

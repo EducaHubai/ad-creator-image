@@ -16,7 +16,7 @@ import { DARK, LIGHT, ThemeContext } from "./theme/tokens.js";
 // ─── ROOT APP ────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("dashboard");
-  const [generatePath, setGeneratePath] = useState(null); // "scratch" | "replicate"
+  const [generatePath, setGeneratePath] = useState(null); // "scratch" | "replicate" | "template"
   const [batches, setBatches] = useState([]);
   const [brands, setBrands] = useState(DEFAULT_BRANDS);
   const [activeBatch, setActiveBatch] = useState(null);

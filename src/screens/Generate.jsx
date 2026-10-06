@@ -1,13 +1,19 @@
 import { useRef, useState } from "react";
 import { ImageModeSelect, ImageModelSelect, TextModelSelect } from "../components/ModelSelects.jsx";
+import { TemplateEditor } from "../components/TemplateEditor.jsx";
+import { TemplateMapping } from "../components/TemplateMapping.jsx";
 import { CodeChip, RefImagesStrip, ZoomableThumb } from "../components/ui.jsx";
 import { SelectPill, StepIndicator } from "../components/wizard.jsx";
 import { ALL_CTAS, AUDIENCES, CTAS_BY_GOAL, FORMATS, GOALS, PAINS } from "../lib/campaignOptions.js";
 import { estimateBatchCost, parseCustomDim } from "../lib/formats.js";
 import { hasApiKey } from "../lib/llm.js";
+import { loadImage } from "../lib/composite.js";
+import { detectTemplate } from "../lib/detectTemplate.js";
 import { batchAvailableFor, getImageModel, getImgMode, setImageModel, setImgMode } from "../lib/models.js";
-import { parseFile } from "../lib/parseFile.js";
+import { parseFile, parseTable } from "../lib/parseFile.js";
 import { analyzeRefImages, analyzeReferenceCreative } from "../lib/referenceImages.js";
+import { BUCKETS, uploadFile } from "../lib/supabase";
+import { autoMap, interpolate, textSlotsByProminence } from "../lib/template.js";
 import { useTheme } from "../theme/tokens.js";
 
 export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
@@ -27,7 +33,11 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     customDims: [],
     refImages: [],
     replicateImage: null,
+    template: null,
+    table: null,
   });
+  const [detecting, setDetecting] = useState(false);
+  const [detectError, setDetectError] = useState("");
   const [customAudience, setCustomAudience] = useState("");
   const [customPain, setCustomPain] = useState("");
   const [customCta, setCustomCta] = useState("");
@@ -150,6 +160,48 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     reader.readAsDataURL(file);
   }
 
+  const templateImgRef = useRef();
+  function handleTemplateImageUpload(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      const data = ev.target.result;
+      const img = await loadImage(data);
+      if (!img) { setDetectError("No se pudo leer la imagen"); return; }
+      const template = { width: img.naturalWidth, height: img.naturalHeight, referenceData: data, referenceName: file.name, styleDescriptor: "", slots: [] };
+      setCfg(p => ({ ...p, replicateImage: { name: file.name, data }, template, table: null }));
+      if (hasApiKey()) runDetect(template);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // Pre-rellena las cajas con IA; el usuario las corrige en el editor.
+  async function runDetect(template) {
+    setDetecting(true);
+    setDetectError("");
+    try {
+      const d = await detectTemplate(template.referenceData);
+      setCfg(p => ({ ...p, template: { ...template, styleDescriptor: d.styleDescriptor, slots: d.slots } }));
+    } catch (err) {
+      setDetectError(err.message || String(err));
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  const tableRef = useRef();
+  async function handleTableFile(e) {
+    const file = e.target.files[0]; if (!file) return;
+    setUploadError("");
+    try {
+      const table = await parseTable(file);
+      if (!table.rows.length) { setUploadError("El archivo no tiene filas con datos."); return; }
+      setCfg(p => ({ ...p, table, csvText: file.name, template: autoMap(p.template, table.headers) }));
+    } catch (err) {
+      setUploadError("Error al leer el archivo: " + (err.message || "formato no soportado"));
+    }
+  }
+
   const fileRef = useRef();
   async function handleFile(e) {
     const file = e.target.files[0]; if (!file) return;
@@ -175,13 +227,22 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   const [imgModeChoice, setImgModeChoice] = useState(getImgMode);
   // Un "batch" guardado no vale si el server no puede con el modelo actual.
   const imgMode = imgModeChoice === "batch" && batchAvailableFor(imageModel) ? "batch" : "rapid";
-  const { imagesEstimate, costEstimate } = estimateBatchCost(cfg.courses.length, usePilotFlowEstimate, imageModel, imgMode);
+  // Camino plantilla: textos del CSV, 1 foto por fila, siempre en modo Rápido.
+  const isTemplate = path === "template";
+  const rowCount = isTemplate ? (cfg.table?.rows.length || 0) : cfg.courses.length;
+  const hasPhotoSlot = !!cfg.template?.slots.some(s => s.type === "photo");
+  const { imagesEstimate, costEstimate } = isTemplate
+    ? estimateBatchCost(hasPhotoSlot ? rowCount : 0, false, imageModel, "rapid")
+    : estimateBatchCost(cfg.courses.length, usePilotFlowEstimate, imageModel, imgMode);
+  const adsTotal = isTemplate ? rowCount : cfg.courses.length * (cfg.formats.length + cfg.customDims.length) * cfg.variantCount;
   const [showCostConfirm, setShowCostConfirm] = useState(false);
 
   // Objetivo, audiencia, puntos de dolor y CTAs son opcionales — solo marca,
   // formatos y cursos son obligatorios para poder generar algo. Mismo orden
   // que el array `steps` armado más abajo — debe tener la misma longitud.
-  const canProceedList = path === "replicate"
+  const canProceedList = isTemplate
+    ? [!!cfg.brandId, !!cfg.template?.slots.length && !detecting, rowCount > 0, true]
+    : path === "replicate"
     ? [!!cfg.brandId, !!cfg.replicateImage && hasFormats, cfg.courses.length > 0, true]
     : [!!cfg.brandId, true, hasFormats, cfg.courses.length > 0, true, true];
   const canProceed = canProceedList[step];
@@ -191,7 +252,29 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   async function launchBatch() {
     setLaunching(true);
     let extraConfig = { path };
-    if (path === "replicate") {
+    if (isTemplate) {
+      // La plantilla ya está armada y revisada en el editor: cada fila del
+      // CSV se vuelve un "curso" con su fila cruda, y el único formato de
+      // salida es el tamaño de la referencia. La referencia se sube a storage
+      // para poder retomar el lote tras un reload (best-effort).
+      const { template, table } = cfg;
+      let referencePath = null;
+      try {
+        referencePath = await uploadFile(BUCKETS.brandAssets, `templates/${crypto.randomUUID()}.png`, template.referenceData);
+      } catch (err) { console.warn("[supabase] No se pudo subir la referencia de la plantilla:", err.message); }
+      const titleSlot = textSlotsByProminence(template)[0];
+      extraConfig = {
+        ...extraConfig,
+        template: { ...template, referencePath },
+        formats: [],
+        customDims: [`${template.width}x${template.height}`],
+        courses: table.rows.map((row, i) => ({
+          name: (titleSlot ? interpolate(titleSlot.content, row) : "") || row[template.titleColumn] || `Fila ${i + 1}`,
+          row,
+        })),
+        table: undefined,
+      };
+    } else if (path === "replicate") {
       // Analiza la creatividad de referencia UNA vez acá — reemplaza por completo
       // el brainstorm de 5 direcciones + revisión: este es el único diseño,
       // se replica tal cual en cada curso (BatchProcessor lo detecta via
@@ -230,14 +313,14 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     onBatchCreated(batch);
     setLaunching(false);
     setStep(0);
-    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", customDims: [], refImages: [], replicateImage: null });
+    setCfg({ brandId: brands[0]?.id || "", goal: "", audience: [], painPoints: [], ctas: [], formats: ["story", "feed_4x5"], csvText: "", courses: [], variantCount: 1, customDim: "", customDims: [], refImages: [], replicateImage: null, template: null, table: null });
   }
 
   // Paso: Marca + Objetivo — shared by both paths.
   const stepBrand = (
     <div key="brand" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Configuración de campaña</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>{path === "replicate" ? "Elige tu marca." : "Elige tu marca y define el objetivo de campaña."}</p>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>{path === "replicate" || isTemplate ? "Elige tu marca." : "Elige tu marca y define el objetivo de campaña."}</p>
 
       <div style={{ marginBottom: 24 }}>
         <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Marca</label>
@@ -250,7 +333,7 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         </div>
       </div>
 
-      {path !== "replicate" && (
+      {path !== "replicate" && !isTemplate && (
         <div style={{ marginBottom: 24 }}>
           <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
             Objetivo de campaña <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>opcional</span>
@@ -501,6 +584,71 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     </div>
   );
 
+  // Paso (template only): referencia → plantilla editable.
+  const stepTemplateCreative = (
+    <div key="template-creative" className="fade-in">
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Anuncio de referencia → plantilla</h2>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 20 }}>Subí un anuncio ya hecho. La IA marca la foto, los textos, el CTA y el logo; revisá y ajustá las cajas. Solo esas zonas cambian por fila — el resto del diseño queda idéntico.</p>
+
+      {!cfg.template ? (
+        <div onClick={() => templateImgRef.current?.click()}
+          onMouseEnter={e => e.currentTarget.style.borderColor = T.textMuted}
+          onMouseLeave={e => e.currentTarget.style.borderColor = T.cardBorder}
+          style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 12, padding: "36px 20px", textAlign: "center", cursor: "pointer", transition: "border-color 0.15s", background: T.card }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Subir anuncio de referencia</div>
+          <div style={{ fontSize: 12, color: T.textMuted }}>PNG o JPG — la salida tendrá el mismo tamaño que esta imagen</div>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: T.textMuted }}>{cfg.template.referenceName} · {cfg.template.width}×{cfg.template.height}px</span>
+            {detecting && <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.blueMid }}><span className="spin" style={{ width: 12, height: 12, border: `2px solid ${T.cardBorder}`, borderTopColor: T.blueMid, borderRadius: "50%", display: "inline-block" }} /> Detectando elementos…</span>}
+            {hasApiKey() && !detecting && <button onClick={() => runDetect(cfg.template)} style={{ fontSize: 11, color: T.blueMid, background: "transparent" }}>↺ Detectar de nuevo con IA</button>}
+            <button onClick={() => setCfg(p => ({ ...p, template: null, replicateImage: null, table: null }))} style={{ fontSize: 11, color: T.textMuted, background: "transparent", marginLeft: "auto" }}>Cambiar imagen ×</button>
+          </div>
+          {detectError && (
+            <div style={{ padding: "10px 14px", background: T.statusFail.bg, borderRadius: 8, marginBottom: 12, fontSize: 12, color: T.statusFail.text }}>
+              No se pudo detectar automáticamente: {detectError}. Podés agregar las cajas a mano.
+            </div>
+          )}
+          <TemplateEditor template={cfg.template} onChange={t => set("template", t)} brand={brand} />
+        </>
+      )}
+      <input ref={templateImgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleTemplateImageUpload} />
+    </div>
+  );
+
+  // Paso (template only): CSV → mapeo de columnas a cada slot + vista previa.
+  const stepTemplateCsv = (
+    <div key="template-csv" className="fade-in">
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Datos del CSV</h2>
+      <p style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.7, marginBottom: 20 }}>
+        Una fila = un anuncio. Asigná a cada elemento una columna con <CodeChip>{"{{Columna}}"}</CodeChip>, un texto fijo, o una mezcla.
+      </p>
+      <input ref={tableRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.ods" onChange={handleTableFile} style={{ display: "none" }} />
+      {uploadError && (
+        <div style={{ padding: "10px 14px", background: T.statusFail.bg, border: `1px solid #f5c0c0`, borderRadius: 8, marginBottom: 12, fontSize: 12, color: T.statusFail.text }}>{uploadError}</div>
+      )}
+      {!cfg.table ? (
+        <div onClick={() => tableRef.current?.click()}
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleTableFile({ target: { files: [f] } }); }}
+          style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 16, padding: "40px 32px", textAlign: "center", cursor: "pointer", background: T.card }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Suelta tu CSV o Excel aquí</div>
+          <div style={{ fontSize: 13, color: T.textMuted }}>o haz clic para explorar</div>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{cfg.table.rows.length} filas · {cfg.csvText}</span>
+            <button onClick={() => setCfg(p => ({ ...p, table: null, csvText: "" }))} style={{ fontSize: 11, color: T.textMuted, background: "transparent" }}>Cambiar archivo ×</button>
+          </div>
+          <TemplateMapping template={cfg.template} onChange={t => set("template", t)} table={cfg.table} brand={brand} />
+        </>
+      )}
+    </div>
+  );
+
   // Paso (scratch only): referencias visuales + logo, opcional.
   const stepRefsLogo = (
     <div key="refs-logo" className="fade-in">
@@ -539,7 +687,13 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       <div style={{ background: T.card, border: `1px solid ${T.cardBorder}`, borderRadius: 12, overflow: "hidden", marginBottom: 20 }}>
         {[
           ["Marca", brand?.name],
-          ...(path === "replicate"
+          ...(isTemplate
+            ? [
+                ["Referencia", cfg.template ? `${cfg.template.referenceName} (${cfg.template.width}×${cfg.template.height})` : "—"],
+                ["Elementos", `${cfg.template?.slots.length || 0} (${hasPhotoSlot ? "foto nueva por fila" : "sin foto a reemplazar"})`],
+                ["Filas", `${rowCount} filas → ${adsTotal} anuncios`],
+              ]
+            : path === "replicate"
             ? [["Creatividad a replicar", cfg.replicateImage?.name || "—"]]
             : [
                 ["Objetivo", cfg.goal || "—"],
@@ -547,8 +701,8 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
                 ["Puntos de dolor", cfg.painPoints.join(" · ") || "—"],
                 ["CTAs", cfg.ctas.join(" / ") || "—"],
               ]),
-          ["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...cfg.customDims.map(d => `Custom ${d}`)].join(", ")],
-          ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + cfg.customDims.length)} anuncios`],
+          ...(isTemplate ? [] : [["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...cfg.customDims.map(d => `Custom ${d}`)].join(", ")],
+          ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + cfg.customDims.length)} anuncios`]]),
           ...(cfg.refImages.length ? [["Referencias visuales", `${cfg.refImages.length} imagen(es)`]] : []),
         ].map(([k, v], i, arr) => (
           <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "12px 20px", borderBottom: i < arr.length - 1 ? `1px solid ${T.cardBorder}` : "none" }}>
@@ -558,14 +712,14 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         ))}
       </div>
 
-      <TextModelSelect />
+      {!isTemplate && <TextModelSelect />}
       <ImageModelSelect model={imageModel} onChange={id => { setImageModelState(id); setImageModel(id); }} />
-      <ImageModeSelect mode={imgMode} imageModel={imageModel} onChange={id => { setImgModeChoice(id); setImgMode(id); }} />
+      {!isTemplate && <ImageModeSelect mode={imgMode} imageModel={imageModel} onChange={id => { setImgModeChoice(id); setImgMode(id); }} />}
 
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {cfg.courses.length * (cfg.formats.length + cfg.customDims.length) * cfg.variantCount} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
-          <div style={{ fontSize: 11, color: T.white, opacity: 0.75 }}>La IA investigará cada URL y generará copy + prompts de imagen</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.white, marginBottom: 3 }}>Estimado: {adsTotal} creatividades · ~{imagesEstimate} imágenes (≈${costEstimate.toFixed(2)})</div>
+          <div style={{ fontSize: 11, color: T.white, opacity: 0.75 }}>{isTemplate ? "Textos del CSV · la IA solo genera la foto de cada fila" : "La IA investigará cada URL y generará copy + prompts de imagen"}</div>
         </div>
         <button onClick={() => setShowCostConfirm(true)} disabled={launching} style={{ background: T.accent, color: T.accentDark, fontSize: 13, fontWeight: 700, padding: "10px 24px", borderRadius: 999, whiteSpace: "nowrap", opacity: launching ? 0.7 : 1, cursor: launching ? "wait" : "pointer" }}>
           {launching ? "Analizando referencias…" : "✦ Lanzar lote"}
@@ -592,7 +746,9 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   // Replicate has real fewer variables to set than scratch — brand, the
   // reference creative + its formats, then courses. No objetivo/audiencia/
   // dolor/CTAs step at all (copy generation infers those when unset).
-  const steps = path === "replicate"
+  const steps = isTemplate
+    ? [stepBrand, stepTemplateCreative, stepTemplateCsv, stepConfirm]
+    : path === "replicate"
     ? [stepBrand, stepReplicateCreative, stepCourses, stepConfirm]
     : [stepBrand, stepAudience, stepCtasFormats, stepCourses, stepRefsLogo, stepConfirm];
 

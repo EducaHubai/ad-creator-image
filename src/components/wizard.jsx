@@ -42,12 +42,17 @@ export function GenerateChoice({ onChoose }) {
       title: "Replicar una creatividad existente",
       desc: "Subís una imagen de referencia (un anuncio ya hecho), la IA la analiza, y ese mismo diseño se replica en todos los cursos — solo cambian título, keywords e imagen.",
     },
+    {
+      path: "template",
+      title: "Clonar con plantilla (beta)",
+      desc: "Subís un anuncio y marcás sus zonas (foto, textos, CTA, logo). Cada fila del CSV genera un anuncio idéntico a la referencia: solo cambian la foto y los textos que mapees.",
+    },
   ];
   return (
     <div className="fade-in content-area" style={{ flex: 1, padding: "40px 32px", maxWidth: 900 }}>
       <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 8 }}>¿Cómo querés generar este lote?</h1>
       <p style={{ fontSize: 14, color: T.textMuted, marginBottom: 32 }}>Elegí un camino — el resto del wizard se adapta según cuál elijas.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 20 }}>
         {cards.map(c => (
           <button key={c.path} onClick={() => onChoose(c.path)}
             style={{ textAlign: "left", background: T.card, border: `1.5px solid ${T.cardBorder}`, borderRadius: 16, padding: "28px 24px", display: "flex", flexDirection: "column", gap: 10, transition: "border-color 0.15s" }}
