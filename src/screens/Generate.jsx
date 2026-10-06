@@ -27,7 +27,6 @@ const initialCfg = brands => ({
   customDim: "",
   customDims: [],
   refImages: [],
-  replicateImage: null,
   // Camino plantilla: resoluciones marcadas, resoluciones custom y plantillas
   // por resolución ({ [clave]: [plantilla] }).
   tplSelected: [],
@@ -164,14 +163,6 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     }))).then(loaded => set("refImages", [...cfg.refImages, ...loaded].slice(0, 6)));
   }
 
-  const replicateImgRef = useRef();
-  function handleReplicateImageUpload(e) {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => set("replicateImage", { name: file.name, data: ev.target.result });
-    reader.readAsDataURL(file);
-  }
-
   const tableRef = useRef();
   async function handleTableFile(e) {
     const file = e.target.files[0]; if (!file) return;
@@ -213,13 +204,18 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   // Camino plantilla: textos del CSV, 1 foto por fila, siempre en modo Rápido.
   const isTemplate = path === "template";
   const rowCount = isTemplate ? (cfg.table?.rows.length || 0) : cfg.courses.length;
-  const tplList = isTemplate ? flattenTemplates(cfg.templateSets, cfg.tplSelected) : [];
+  // Camino replicar: también plantillas por resolución (creatividades enteras,
+  // sin cajas) — cada curso genera una imagen por plantilla.
+  const isReplicate = path === "replicate";
+  const tplList = isTemplate || isReplicate ? flattenTemplates(cfg.templateSets, cfg.tplSelected) : [];
   const photosPerRow = countPhotosPerRow(tplList, cfg.sharePhoto);
-  const tplIssue = isTemplate ? templateSetsIssues(cfg) : "";
+  const tplIssue = isTemplate ? templateSetsIssues(cfg) : isReplicate ? templateSetsIssues(cfg, { requireSlots: false }) : "";
   const { imagesEstimate, costEstimate } = isTemplate
     ? estimateBatchCost(rowCount * photosPerRow, false, imageModel, "rapid")
+    : isReplicate
+    ? estimateBatchCost(cfg.courses.length * tplList.length, false, imageModel, "rapid")
     : estimateBatchCost(cfg.courses.length, usePilotFlowEstimate, imageModel, imgMode);
-  const adsTotal = isTemplate ? rowCount * tplList.length : cfg.courses.length * (cfg.formats.length + cfg.customDims.length) * cfg.variantCount;
+  const adsTotal = isTemplate || isReplicate ? rowCount * tplList.length : cfg.courses.length * (cfg.formats.length + cfg.customDims.length) * cfg.variantCount;
   const [showCostConfirm, setShowCostConfirm] = useState(false);
 
   // Objetivo, audiencia, puntos de dolor y CTAs son opcionales — solo marca,
@@ -228,7 +224,7 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   const canProceedList = isTemplate
     ? [!!cfg.brandId, !tplIssue, rowCount > 0, true]
     : path === "replicate"
-    ? [!!cfg.brandId, !!cfg.replicateImage && hasFormats, cfg.courses.length > 0, true]
+    ? [!!cfg.brandId, !tplIssue, cfg.courses.length > 0, true]
     : [!!cfg.brandId, true, hasFormats, cfg.courses.length > 0, true, true];
   const canProceed = canProceedList[step];
 
@@ -267,19 +263,26 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
         templateSets: undefined,
       };
     } else if (path === "replicate") {
-      // Analiza la creatividad de referencia UNA vez acá — reemplaza por completo
-      // el brainstorm de 5 direcciones + revisión: este es el único diseño,
-      // se replica tal cual en cada curso (BatchProcessor lo detecta via
-      // config.path === "replicate" y arranca con winningDirection ya fijado).
-      let replicateStyleDescriptor = "";
-      let replicateLayout = null;
-      try {
-        const analysis = await analyzeReferenceCreative(cfg.replicateImage?.data);
-        replicateStyleDescriptor = analysis.description;
-        replicateLayout = analysis.layout;
-      } catch (err) { console.warn("No se pudo analizar la creatividad de referencia:", err.message); }
-      extraConfig.replicateStyleDescriptor = replicateStyleDescriptor;
-      extraConfig.replicateLayout = replicateLayout;
+      // Analiza cada plantilla UNA vez acá — reemplaza por completo el
+      // brainstorm de 5 direcciones + revisión: cada plantilla es un diseño
+      // y cada curso genera una imagen por plantilla, en su resolución, con
+      // la plantilla como referencia real (BatchProcessor: config.replicateRefs).
+      // Se suben a storage para poder retomar el lote tras un reload.
+      const replicateRefs = [];
+      for (let o = 0; o < tplList.length; o += 3) {
+        replicateRefs.push(...await Promise.all(tplList.slice(o, o + 3).map(async t => {
+          let styleDescriptor = "", layout = null, referencePath = null;
+          try { ({ description: styleDescriptor, layout } = await analyzeReferenceCreative(t.referenceData)); }
+          catch (err) { console.warn("No se pudo analizar la plantilla:", t.referenceName, err.message); }
+          try { referencePath = await uploadFile(BUCKETS.brandAssets, `replicate/${crypto.randomUUID()}.png`, t.referenceData); }
+          catch (err) { console.warn("[supabase] No se pudo subir la plantilla:", err.message); }
+          return { id: t.id, name: t.referenceName, outLabel: t.outLabel, outW: t.outW, outH: t.outH, data: t.referenceData, referencePath, styleDescriptor, layout };
+        })));
+      }
+      extraConfig.replicateRefs = replicateRefs;
+      extraConfig.formats = [];
+      extraConfig.customDims = replicateRefs.map(r => r.outLabel);
+      extraConfig.templateSets = undefined;
     } else {
       // Referencias visuales del lote (si las hay) se resumen una sola vez acá,
       // en un descriptor de texto que guía las 5 direcciones del piloto —
@@ -537,42 +540,13 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
     </div>
   );
 
-  // Paso (replicate only): creatividad de referencia + formatos + logo.
+  // Paso (replicate only): plantillas por resolución + logo.
   const stepReplicateCreative = (
     <div key="replicate-creative" className="fade-in">
-      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Creatividad a replicar</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 28 }}>Subí un anuncio ya existente — se analiza y ese mismo diseño se replica en todos los cursos, cambiando solo título, keywords e imagen.</p>
-
-      <div style={{ marginBottom: 28 }}>
-        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Imagen de referencia <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>obligatorio</span>
-        </label>
-        {cfg.replicateImage ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: `1px solid ${T.cardBorder}`, borderRadius: 10, background: T.card }}>
-            <ZoomableThumb src={cfg.replicateImage.data} title={cfg.replicateImage.name} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${T.cardBorder}` }} />
-            <span style={{ fontSize: 12, color: T.textMuted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cfg.replicateImage.name}</span>
-            <button onClick={() => set("replicateImage", null)} style={{ fontSize: 11, color: T.textMuted, background: "transparent" }}>Cambiar ×</button>
-          </div>
-        ) : (
-          <div onClick={() => replicateImgRef.current?.click()}
-            onMouseEnter={e => e.currentTarget.style.borderColor = T.textMuted}
-            onMouseLeave={e => e.currentTarget.style.borderColor = T.cardBorder}
-            style={{ border: `1.5px dashed ${T.cardBorder}`, borderRadius: 12, padding: "28px 20px", textAlign: "center", cursor: "pointer", transition: "border-color 0.15s", background: T.card }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Subir creatividad de referencia</div>
-            <div style={{ fontSize: 12, color: T.textMuted }}>PNG o JPG — un anuncio ya hecho, de esta marca o de otra</div>
-          </div>
-        )}
-        <input ref={replicateImgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleReplicateImageUpload} />
-      </div>
-
-      <div style={{ marginBottom: 28 }}>
-        <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>
-          Formatos de salida <span style={{ color: T.textLight, fontWeight: 400, textTransform: "none" }}>tantos como necesites, con sus medidas</span>
-        </label>
-        {renderFormatsPicker()}
-      </div>
-
-      {logoBlock}
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Resoluciones y plantillas a replicar</h2>
+      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 20 }}>Marcá las resoluciones a generar y abrí cada una para subir sus plantillas (anuncios ya hechos, de esta marca o de otra). Cada plantilla se analiza y se replica en todos los cursos, en su resolución — solo cambian título, keywords e imagen.</p>
+      <TemplateSetsStep cfg={cfg} patch={patchCfg} brand={brand} mode="replicate" />
+      <div style={{ marginTop: 28 }}>{logoBlock}</div>
     </div>
   );
 
@@ -661,14 +635,14 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
                 ["Filas", `${rowCount} filas × ${tplList.length} plantillas → ${adsTotal} anuncios`],
               ]
             : path === "replicate"
-            ? [["Creatividad a replicar", cfg.replicateImage?.name || "—"]]
+            ? [["Plantillas", cfg.tplSelected.map(k => { const r = resolutionInfo(k); return `${r.w}×${r.h} (${(cfg.templateSets[k] || []).length})`; }).join(" · ")]]
             : [
                 ["Objetivo", cfg.goal || "—"],
                 ["Audiencia", cfg.audience.join(", ") || "—"],
                 ["Puntos de dolor", cfg.painPoints.join(" · ") || "—"],
                 ["CTAs", cfg.ctas.join(" / ") || "—"],
               ]),
-          ...(isTemplate ? [] : [["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...cfg.customDims.map(d => `Custom ${d}`)].join(", ")],
+          ...(isTemplate ? [] : isReplicate ? [["Cursos", `${cfg.courses.length} cursos × ${tplList.length} plantillas → ${adsTotal} anuncios`]] : [["Formatos", [...cfg.formats.map(f => FORMATS.find(x => x.id === f)?.label).filter(Boolean), ...cfg.customDims.map(d => `Custom ${d}`)].join(", ")],
           ["Cursos", `${cfg.courses.length} cursos → ${cfg.courses.length * (cfg.formats.length + cfg.customDims.length)} anuncios`]]),
           ...(cfg.refImages.length ? [["Referencias visuales", `${cfg.refImages.length} imagen(es)`]] : []),
         ].map(([k, v], i, arr) => (
@@ -690,7 +664,7 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       )}
       {!isTemplate && <TextModelSelect />}
       <ImageModelSelect model={imageModel} onChange={id => { setImageModelState(id); setImageModel(id); }} />
-      {!isTemplate && <ImageModeSelect mode={imgMode} imageModel={imageModel} onChange={id => { setImgModeChoice(id); setImgMode(id); }} />}
+      {!isTemplate && !isReplicate && <ImageModeSelect mode={imgMode} imageModel={imageModel} onChange={id => { setImgModeChoice(id); setImgMode(id); }} />}
 
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
@@ -734,7 +708,7 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       {steps[step]}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36 }}>
         <button onClick={() => setStep(s => Math.max(0, s - 1))} style={{ background: "transparent", color: step === 0 ? T.textLight : T.textMuted, fontSize: 13, padding: "8px 0", opacity: step === 0 ? 0.55 : 1 }} disabled={step === 0}>← Atrás</button>
-        {isTemplate && step === 1 && tplIssue && <span style={{ marginLeft: "auto", marginRight: 14, alignSelf: "center", fontSize: 12, color: T.textMuted }}>{tplIssue}</span>}
+        {(isTemplate || isReplicate) && step === 1 && tplIssue && <span style={{ marginLeft: "auto", marginRight: 14, alignSelf: "center", fontSize: 12, color: T.textMuted }}>{tplIssue}</span>}
         {step < steps.length - 1 && <button onClick={() => {
           // Plantillas agregadas después de cargar el CSV: se mapean al entrar al paso del CSV.
           if (isTemplate && step === 1 && cfg.table) setCfg(p => ({ ...p, templateSets: autoMapSets(p.templateSets, p.table.headers) }));

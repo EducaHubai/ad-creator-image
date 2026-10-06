@@ -10,6 +10,8 @@ import { hasApiKey } from "../lib/llm.js";
 import { IMG_DELAY_MS, batchAvailableFor, getImageModel, getImgMode } from "../lib/models.js";
 import { batchTemplates, generateTemplatePhoto, renderTemplateRow, resolveTemplate } from "../lib/templatePipeline.js";
 import { photoKey } from "../lib/templateSets.js";
+import { nearestAspect } from "../lib/template.js";
+import { srcToDataUrl } from "../lib/referenceImages.js";
 import { FALLBACK_STYLE_VARIANTS, buildStyleVariantPrompt, generateStyleDirections } from "../lib/styleDirections.js";
 import { BUCKETS, createBatch, fetchBatch, fetchCreatives, getSignedUrl, insertCreative, updateBatch, uploadFile } from "../lib/supabase";
 import { useTheme } from "../theme/tokens.js";
@@ -53,7 +55,7 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
   // necesita al retomar (replicateStyleDescriptor, refImageDescriptor,
   // winningDirection) sí se conservan; courses vive en su columna propia.
   function persistableConfig(config = {}) {
-    const { replicateImage, refImages, csvText, courses, template, templates, ...rest } = config;
+    const { replicateImage, replicateRefs, refImages, csvText, courses, template, templates, ...rest } = config;
     void csvText; void courses;
     return {
       ...rest,
@@ -63,6 +65,7 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
       // recuperan de storage vía referencePath al retomar.
       ...(template ? { template: { ...template, referenceData: undefined } } : {}),
       ...(templates ? { templates: templates.map(t => ({ ...t, referenceData: undefined })) } : {}),
+      ...(replicateRefs ? { replicateRefs: replicateRefs.map(r => ({ ...r, data: undefined })) } : {}),
     };
   }
 
@@ -343,6 +346,16 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
       ...customDims.map(d => ({ key: d, ...customDimToSize(d) })),
     ];
     const primaryApiSize = formatList[0]?.api || "1:1";
+    // Camino replicar con plantillas por resolución: una imagen por curso y
+    // plantilla, generada con esa plantilla como referencia y compuesta con
+    // su layout. Al retomar, las referencias se recuperan de storage.
+    const replicateRefs = batch.config.replicateRefs?.length
+      ? await Promise.all(batch.config.replicateRefs.map(async r => {
+          if (r.data || !r.referencePath) return r;
+          try { return { ...r, data: await srcToDataUrl(await getSignedUrl(BUCKETS.brandAssets, r.referencePath)) }; }
+          catch (err) { console.warn("[supabase] No se pudo recuperar la plantilla:", err.message); return r; }
+        }))
+      : null;
 
     await persistBatchStart();
     const resume = resumeStateRef.current; // set only when reopening an interrupted batch
@@ -532,7 +545,9 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
 
     // Image generation (requires a LiteLLM key)
     const batchImageModel = getImageModel();
-    if (hasApiKey() && getImgMode() === "batch" && batchAvailableFor(batchImageModel)) {
+    // Las plantillas de "replicar" van siempre en Rápido: /api/batch/submit no
+    // lleva imagen de referencia.
+    if (hasApiKey() && !replicateRefs && getImgMode() === "batch" && batchAvailableFor(batchImageModel)) {
       // ── Modo Batch (50% más barato, asíncrono): Google Batch API para los
       // modelos Gemini, managed batches de LiteLLM para el de OpenAI ────────
       // NOTA: a diferencia del Modo Rápido, acá /api/batch/submit solo manda
@@ -653,6 +668,35 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
         }
         const firstCopy = Array.isArray(item.copies) ? item.copies[0] : {};
         setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging" } : it));
+        if (replicateRefs) {
+          const composited = {}, qaIssues = {}, errors = [];
+          let imagePrompt = "";
+          for (let j = 0; j < replicateRefs.length; j++) {
+            await waitIfPaused();
+            if (isCancelledRef.current) return;
+            const ref = replicateRefs[j];
+            try {
+              imagePrompt = buildStyleVariantPrompt({ id: "replicated", label: "Creatividad replicada", description: ref.styleDescriptor || "" }, brand, item, item.keywords5);
+              const imageB64 = await generateImage(imagePrompt, nearestAspect(ref.outW, ref.outH), ref.data || undefined);
+              if (isCancelledRef.current) return;
+              const result = await compositeAd(imageB64, firstCopy, brand, ref.outW, ref.outH, ref.layout || undefined);
+              composited[ref.outLabel] = result.dataUrl;
+              qaIssues[ref.outLabel] = result.qaIssues;
+              persistCreative(i, item, firstCopy, imagePrompt, ref.outLabel, { w: ref.outW, h: ref.outH }, result.dataUrl);
+            } catch (err) {
+              errors.push(`${ref.outLabel}: ${err.message}`);
+            }
+            setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status: "imaging", composited: { ...composited } } : it));
+            if (j < replicateRefs.length - 1) await new Promise(r => setTimeout(r, IMG_DELAY_MS));
+          }
+          const anyDone = Object.keys(composited).length > 0;
+          researched[i] = { ...item, status: anyDone ? "imaged" : "imageFailed", imagePrompt, composited, qaIssues, ...(errors.length ? { imageError: errors.join(" · ") } : {}) };
+          if (anyDone) persistBatchProgress(i);
+          setItems(prev => prev.map((it, idx) => idx === i ? researched[i] : it));
+          setProgress(70 + Math.round(((i + 1 - pilotStartIdx) / remainingCount) * 30));
+          if (i < researched.length - 1) await new Promise(r => setTimeout(r, IMG_DELAY_MS));
+          continue;
+        }
         try {
           const imagePrompt = winningDirection
             ? buildStyleVariantPrompt(winningDirection, brand, item, item.keywords5)
@@ -691,7 +735,8 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
   }
 
   const isTemplatePath = batch.config.path === "template";
-  const templateCount = isTemplatePath ? batchTemplates(batch.config).length : 0;
+  // Plantillas por fila: camino plantilla o replicar con plantillas por resolución.
+  const templateCount = isTemplatePath ? batchTemplates(batch.config).length : (batch.config.replicateRefs?.length || 0);
   const done = items.filter(it => ["generated","imaged","imageFailed","researchFailed","copyFailed"].includes(it.status)).length;
   // Colecciones para el visor: candidatos piloto con imagen y filas ya
   // compuestas — permiten ampliar/navegar sin interferir con la selección.
@@ -837,7 +882,7 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
           const firstThumb = it.composited ? Object.values(it.composited)[0] : null;
           const failMsg = it.status === "researchFailed" ? it.researchError : it.status === "copyFailed" ? it.copyError : it.imageError;
           const nDone = Object.keys(it.composited || {}).length;
-          const perRow = isTemplatePath ? `${nDone}/${templateCount}` : "";
+          const perRow = templateCount ? `${nDone}/${templateCount}` : "";
           const statusLabel = isImaged ? (perRow ? `${perRow} listas${it.imageError ? ` · error: ${it.imageError.slice(0, 40)}` : ""}` : "Imagen lista") : isFailed ? `Error: ${failMsg?.slice(0,40)}` : isImaging ? `Generando imagen…${perRow ? ` ${perRow}` : ""}` : isGenerated ? "Copy listo" : it.status === "researched" ? "Investigado" : isResearching ? "Investigando…" : "En cola";
           return (
             <div key={i} style={{ display: "flex", alignItems: "center", padding: "10px 18px", borderBottom: i < items.length - 1 ? `1px solid ${T.cardBorder}` : "none", gap: 12 }}>

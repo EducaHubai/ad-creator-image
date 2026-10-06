@@ -51,12 +51,14 @@ export function countPhotosPerRow(templates, share) {
 }
 
 // Problemas que impiden avanzar del paso de plantillas (texto para el usuario).
-export function templateSetsIssues(cfg) {
+// En el camino "replicar" las creatividades no llevan cajas (requireSlots=false).
+export function templateSetsIssues(cfg, { requireSlots = true } = {}) {
   if (!cfg.tplSelected.length) return "Marcá al menos una resolución.";
   for (const key of cfg.tplSelected) {
     const res = resolutionInfo(key);
     const list = cfg.templateSets[key] || [];
     if (!list.length) return `${res.w}×${res.h} está marcada pero no tiene plantillas.`;
+    if (!requireSlots) continue;
     if (list.some(t => t._detecting)) return "Esperando la detección con IA…";
     const i = list.findIndex(t => !t.slots.length);
     if (i >= 0) return `${res.w}×${res.h} · P${i + 1} no tiene cajas — marcá al menos un elemento.`;

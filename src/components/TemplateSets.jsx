@@ -52,7 +52,10 @@ function MiniFrame({ w, h, sel, T }) {
 // se genera; el click en la tarjeta la abre para subir y editar sus
 // plantillas. Estado en cfg: tplSelected, tplCustomDims, templateSets, table.
 // `patch(fn)` aplica fn(cfgPrevio) → cambios parciales del cfg.
-export function TemplateSetsStep({ cfg, patch, brand }) {
+// mode "replicate": las plantillas son creatividades de referencia enteras —
+// sin detección de cajas ni editor (la IA las replica como estilo).
+export function TemplateSetsStep({ cfg, patch, brand, mode = "template" }) {
+  const isReplicate = mode === "replicate";
   const T = useTheme();
   const [openKey, setOpenKey] = useState(cfg.tplSelected[0] || FORMATS[0].id);
   const [editingId, setEditingId] = useState(null);
@@ -94,7 +97,7 @@ export function TemplateSetsStep({ cfg, patch, brand }) {
       tplSelected: p.tplSelected.includes(key) ? p.tplSelected : [...p.tplSelected, key],
     }));
     setEditingId(loaded[0].id);
-    if (hasApiKey()) loaded.forEach(t => detect(key, t));
+    if (hasApiKey() && !isReplicate) loaded.forEach(t => detect(key, t));
   }
 
   function addCustom() {
@@ -120,7 +123,7 @@ export function TemplateSetsStep({ cfg, patch, brand }) {
   return (
     <div>
       <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 10 }}>
-        <b>Casilla</b>: se genera esa resolución · <b>clic en la tarjeta</b>: subir y editar sus plantillas. Cada fila del CSV genera un anuncio por plantilla.
+        <b>Casilla</b>: se genera esa resolución · <b>clic en la tarjeta</b>: {isReplicate ? "subir sus plantillas" : "subir y editar sus plantillas"}. Cada {isReplicate ? "curso" : "fila del CSV"} genera un anuncio por plantilla.
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 18 }}>
         {keys.map(key => {
@@ -190,12 +193,14 @@ export function TemplateSetsStep({ cfg, patch, brand }) {
                 const sel = editing?.id === t.id;
                 return (
                   <div key={t.id} onClick={() => setEditingId(t.id)} style={{ width: 120, cursor: "pointer", border: `${sel ? 2 : 1}px solid ${sel ? T.text : T.cardBorder}`, borderRadius: 10, padding: 6, background: sel ? T.cream : T.card, position: "relative" }}>
-                    <img src={t.referenceData} alt={t.referenceName} style={{ width: "100%", height: 90, objectFit: "contain", borderRadius: 6, background: T.cream, display: "block" }} />
+                    {isReplicate
+                      ? <ZoomableThumb src={t.referenceData} title={t.referenceName} style={{ width: "100%", height: 90, objectFit: "contain", borderRadius: 6, background: T.cream, display: "block" }} />
+                      : <img src={t.referenceData} alt={t.referenceName} style={{ width: "100%", height: 90, objectFit: "contain", borderRadius: 6, background: T.cream, display: "block" }} />}
                     <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>P{i + 1}</div>
                     <div title={t.referenceName} style={{ fontSize: 10, color: T.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.referenceName}</div>
-                    <div style={{ fontSize: 10, marginTop: 2, color: t._detectError ? T.statusFail.text : t._detecting ? T.blueMid : t.slots.length ? T.tealText : "#8A6300" }}>
+                    {!isReplicate && <div style={{ fontSize: 10, marginTop: 2, color: t._detectError ? T.statusFail.text : t._detecting ? T.blueMid : t.slots.length ? T.tealText : "#8A6300" }}>
                       {t._detecting ? "Detectando…" : t._detectError ? "Error al detectar" : t.slots.length ? `✓ ${t.slots.length} elementos` : "Sin cajas"}
-                    </div>
+                    </div>}
                     {mismatch && <div style={{ fontSize: 10, color: "#8A6300" }}>{t.width}×{t.height} · {mismatch === "scale" ? "se escala" : "se recorta"}</div>}
                     <button onClick={e => { e.stopPropagation(); removeTemplate(openKey, t.id); }} title="Quitar plantilla"
                       style={{ position: "absolute", top: 4, right: 4, width: 18, height: 18, borderRadius: "50%", background: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 11, lineHeight: "18px", padding: 0 }}>×</button>
@@ -207,7 +212,7 @@ export function TemplateSetsStep({ cfg, patch, brand }) {
         </div>
       )}
 
-      {editing && (
+      {editing && !isReplicate && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, fontWeight: 700 }}>P{openList.indexOf(editing) + 1}</span>
@@ -226,7 +231,7 @@ export function TemplateSetsStep({ cfg, patch, brand }) {
       )}
 
       <div style={{ fontSize: 12, color: T.textMuted, marginTop: 12 }}>
-        Total: <b style={{ color: T.text }}>{total} plantilla{total === 1 ? "" : "s"}</b> en {cfg.tplSelected.length} resolución{cfg.tplSelected.length === 1 ? "" : "es"} marcada{cfg.tplSelected.length === 1 ? "" : "s"} → {total} anuncios por fila del CSV.
+        Total: <b style={{ color: T.text }}>{total} plantilla{total === 1 ? "" : "s"}</b> en {cfg.tplSelected.length} resolución{cfg.tplSelected.length === 1 ? "" : "es"} marcada{cfg.tplSelected.length === 1 ? "" : "s"} → {total} anuncios por {isReplicate ? "curso" : "fila del CSV"}.
       </div>
     </div>
   );
