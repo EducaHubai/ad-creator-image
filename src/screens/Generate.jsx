@@ -543,8 +543,8 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   // Paso (replicate only): plantillas por resolución + logo.
   const stepReplicateCreative = (
     <div key="replicate-creative" className="fade-in">
-      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Resoluciones y plantillas a replicar</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 20 }}>Marcá las resoluciones a generar y abrí cada una para subir sus plantillas (anuncios ya hechos, de esta marca o de otra). Cada plantilla se analiza y se replica en todos los cursos, en su resolución — solo cambian título, keywords e imagen.</p>
+      <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Resoluciones y plantillas</h2>
+      <p style={{ fontSize: 14, color: T.textMuted, maxWidth: 640, margin: "0 auto 24px", lineHeight: 1.6 }}>Elegí en qué resoluciones generar y subí a cada una sus plantillas: anuncios ya hechos, de esta marca o de otra. Cada plantilla se replica en todos los cursos cambiando título, keywords e imagen.</p>
       <TemplateSetsStep cfg={cfg} patch={patchCfg} brand={brand} mode="replicate" />
       <div style={{ marginTop: 28 }}>{logoBlock}</div>
     </div>
@@ -554,7 +554,7 @@ export function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   const stepTemplateCreative = (
     <div key="template-creative" className="fade-in">
       <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 6 }}>Resoluciones y plantillas</h2>
-      <p style={{ fontSize: 13, color: T.textMuted, marginBottom: 20 }}>Marcá las resoluciones a generar y abrí cada una para subir sus plantillas (anuncios ya hechos). La IA marca la foto, los textos, el CTA y el logo de cada una; revisá y ajustá las cajas. Solo esas zonas cambian por fila — el resto del diseño queda idéntico.</p>
+      <p style={{ fontSize: 14, color: T.textMuted, maxWidth: 640, margin: "0 auto 24px", lineHeight: 1.6 }}>Elegí en qué resoluciones generar y subí a cada una sus plantillas. La IA marca en cada plantilla la foto, los textos, el CTA y el logo; solo esas zonas cambian por fila y el resto del diseño queda idéntico.</p>
       <TemplateSetsStep cfg={cfg} patch={patchCfg} brand={brand} />
     </div>
   );
