@@ -28,6 +28,7 @@ const SYSTEM = `You are an ad layout analyst. Detect every layout element of thi
 }
 Rules:
 - "photo" = the main photograph area (usually one). If the photo fills the whole ad, its box is the full canvas.
+- Text boxes must contain the WHOLE glyphs: include accents and diacritics above capitals (Á, É, Ñ), descenders and the full first/last letters — never cut them off.
 - Each separate text block is its own element (headline, subheadline, body, price, tag...). A CTA button is ONE "cta" element covering the whole button shape.
 - Any text printed directly on the photo (e.g. a "NEW" tag with no shape of its own) is a "text" element (role "tag" if it is a label), NOT a decoration.
 - "decoration" = badges, stickers, icons, illustrations or shapes (with their own background/shape) that sit ON the photo and must be preserved pixel-for-pixel.

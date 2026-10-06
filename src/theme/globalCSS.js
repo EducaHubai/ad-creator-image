@@ -17,6 +17,10 @@ export const globalCSS = `
   ::-webkit-scrollbar-thumb { background: rgba(150,150,150,0.3); border-radius: 2px; }
   button { cursor: pointer; border: none; outline: none; font-family: inherit; }
   input, textarea, select { font-family: inherit; outline: none; }
+  /* index.css (plantilla de Vite) colorea los títulos según el tema del sistema
+     operativo, no el de la app: en "Tema oscuro" quedaban negros sobre negro. */
+  h1, h2, h3 { color: inherit; }
+  button:focus-visible, [role="option"]:focus-visible, [role="button"]:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #2E7ABE; outline-offset: 2px; }
 
   /* ── Hover universal en botones y enlaces ──
      Velo con el color del propio texto (::after): oscurece ligeramente los

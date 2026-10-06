@@ -210,6 +210,11 @@ export function TemplateEditor({ template, onChange, brand, previewRow = null })
 
             {isText && (
               <>
+                {selected.type === "text" && (
+                  <Row label="Rol">
+                    <Select value={selected.role || "other"} onChange={role => set({ role })} options={[["headline", "Título"], ["subheadline", "Subtítulo"], ["body", "Descripción"], ["price", "Precio"], ["tag", "Etiqueta"], ["other", "Otro"]]} />
+                  </Row>
+                )}
                 {selected.sampleText && <Row label="Texto original"><span style={{ fontSize: 11, color: T.textMuted, fontStyle: "italic" }}>"{selected.sampleText}"</span></Row>}
                 <Row label="Fuente">
                   <Select value={selected.font} onChange={font => set({ font })} options={[["display", `Display de marca${brand?.fonts?.display ? ` (${brand.fonts.display})` : ""}`], ["body", `Texto de marca${brand?.fonts?.body ? ` (${brand.fonts.body})` : ""}`]]} />
@@ -259,6 +264,16 @@ export function TemplateEditor({ template, onChange, brand, previewRow = null })
                   <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}><input type="checkbox" checked={selected.useStyleReference} onChange={e => set({ useStyleReference: e.target.checked })} /> mandar la foto original (sin textos) como referencia de estilo</label>
                 </Row>
                 <div style={{ fontSize: 11, color: T.textMuted }}>El tema de la foto se define en el paso del CSV.</div>
+              </>
+            )}
+
+            {selected.type === "keep" && (
+              <>
+                <Row label="Forma">
+                  <Select value={selected.shape || "auto"} onChange={shape => set({ shape })} options={[["auto", "Automática (recorta el fondo)"], ["rounded", "Rectángulo redondeado"], ["ellipse", "Círculo / elipse"], ["rect", "Caja entera"]]} />
+                </Row>
+                {selected.shape === "rounded" && <Row label="Radio esquinas"><Num value={selected.radius} onChange={radius => set({ radius })} /></Row>}
+                <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>Automática detecta la forma por su color y no copia lo que hay detrás (p. ej. la foto vieja asomando por las esquinas). Si el badge es una foto o un degradado, elegí la forma a mano.</div>
               </>
             )}
 

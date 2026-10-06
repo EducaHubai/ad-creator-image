@@ -30,7 +30,7 @@ export function resizeImageFile(file, maxDim = 768, quality = 0.75) {
 // Las imágenes cargadas de la BD llevan .data = URL del proxy de storage
 // (same-origin, tras Basic Auth) — el LLM no puede descargarla. Antes de
 // enviar cualquier imagen al modelo hay que materializarla como data URL.
-async function srcToDataUrl(src) {
+export async function srcToDataUrl(src) {
   if (!src || src.startsWith("data:")) return src || null;
   const blob = await (await fetch(src)).blob();
   return await new Promise((resolve, reject) => {
