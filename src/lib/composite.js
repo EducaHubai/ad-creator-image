@@ -54,7 +54,10 @@ export async function compositeAd(imageB64, copy, brandConfig, width, height, la
   const colors = brandConfig.colors || {};
   const textOverlay  = layoutOverride?.textColor || colors.text_on_overlay || "#ffffff";
   const ctaBgColor   = layoutOverride?.ctaColor   || colors.accent          || "#963058";
-  const ctaFgColor   = colors.cta_text        || "#FFFFFF";
+  // El color del botón puede venir de la referencia (p. ej. blanco) y el del
+  // texto de la marca (también blanco): texto invisible. Si no contrastan, se
+  // usa blanco o casi negro según la luminancia del botón.
+  const ctaFgColor   = readableOn(ctx, ctaBgColor, colors.cta_text || "#FFFFFF");
 
   // Background image — "cover" fit: scale proportionally to fill the canvas
   // (cropping overflow) instead of stretching, since the generated image's
@@ -157,9 +160,27 @@ export async function compositeAd(imageB64, copy, brandConfig, width, height, la
   // dice "top-*"), pero sube/baja lo que haga falta para que headline + body
   // + CTA quepan enteros sobre el margen correspondiente.
   const totalBlockH = hlH + bdBlockH + ctaBlockH;
+
+  // Logo: su caja se reserva ANTES de colocar el texto. Si comparte borde
+  // (arriba o abajo) con el bloque de texto, el texto empieza debajo del logo
+  // (o termina encima) en vez de pintarse encima de él.
+  const resolveLogoSrc = asset => asset?.data || (fontServerBase && asset?.name ? `${fontServerBase}/${asset.name}` : null);
+  const logoWhiteSrc = resolveLogoSrc(brandConfig.logoWhite);
+  const logoDarkSrc  = resolveLogoSrc(brandConfig.logoDark || brandConfig.logoPrimary);
+  const refLogoSrc = logoWhiteSrc || logoDarkSrc;
+  const refLogoImg = refLogoSrc ? await loadImage(refLogoSrc) : null;
+  const logoH = Math.round(height * 0.042);
+  const logoMargin = Math.round(width * 0.055);
+  const logoPlacement = layoutOverride?.logoCorner || brandConfig.adRules?.logoPlacement || "bottom-right";
+  const logoTop = logoPlacement.includes("top");
+  const logoY = logoTop ? logoMargin : height - logoH - logoMargin;
+  const logoGap = Math.round(height * 0.03);
+  const topLimit = refLogoImg && logoTop ? Math.max(pad, logoY + logoH + logoGap) : pad;
+  const bottomLimit = refLogoImg && !logoTop ? Math.min(height - pad, logoY - logoGap) : height - pad;
+
   const hlStartY = isTop
-    ? pad
-    : Math.max(height * 0.34, Math.min(height * 0.58, height - pad - totalBlockH));
+    ? topLimit
+    : Math.max(Math.max(height * 0.34, topLimit), Math.min(height * 0.58, bottomLimit - totalBlockH));
 
   // Gradiente de contraste — del lado del texto (abajo por default, arriba si
   // titleCorner es "top-*"), para que el texto siga siendo legible.
@@ -206,7 +227,7 @@ export async function compositeAd(imageB64, copy, brandConfig, width, height, la
   const ctaBoxX = isRight ? width - pad - ctaBoxW : pad;
   const ctaBoxY = isTop
     ? bdEndY + ctaSize * 1.2
-    : Math.min(bdEndY + ctaSize * 1.2, height - ctaBoxH - pad);
+    : Math.min(bdEndY + ctaSize * 1.2, bottomLimit - ctaBoxH);
   if (ctaStr) {
     ctx.fillStyle = ctaBgColor;
     ctx.beginPath();
@@ -219,19 +240,13 @@ export async function compositeAd(imageB64, copy, brandConfig, width, height, la
 
   // Logo overlay — pick white/dark version by sampling mean luminance under the
   // logo's bbox (spec: L = 0.299R + 0.587G + 0.114B, white logo if L < 140).
-  const resolveLogoSrc = asset => asset?.data || (fontServerBase && asset?.name ? `${fontServerBase}/${asset.name}` : null);
-  const logoWhiteSrc = resolveLogoSrc(brandConfig.logoWhite);
-  const logoDarkSrc  = resolveLogoSrc(brandConfig.logoDark || brandConfig.logoPrimary);
-  const refLogoSrc = logoWhiteSrc || logoDarkSrc;
-
   if (refLogoSrc) {
-    const refLogoImg = await loadImage(refLogoSrc);
     if (refLogoImg) {
-      const lh = Math.round(height * 0.042);
-      const margin = Math.round(width * 0.055);
-      const placement = layoutOverride?.logoCorner || brandConfig.adRules?.logoPlacement || "bottom-right";
+      const lh = logoH;
+      const margin = logoMargin;
+      const placement = logoPlacement;
       const refLw = Math.round(refLogoImg.naturalWidth * lh / Math.max(refLogoImg.naturalHeight, 1));
-      const ly = placement.includes("top") ? margin : height - lh - margin;
+      const ly = logoY;
 
       // Luminancia del fondo bajo el bbox del logo — se mide SIEMPRE (antes
       // solo con dos versiones de logo), porque también decide la placa de
@@ -282,6 +297,23 @@ export async function compositeAd(imageB64, copy, brandConfig, width, height, la
   ], width, height);
 
   return { dataUrl: canvas.toDataURL("image/png"), qaIssues };
+}
+
+// Color de texto legible sobre `bg`: el preferido si contrasta, si no blanco
+// o casi negro. El canvas normaliza cualquier color CSS ("white", "#fff") a hex.
+function readableOn(ctx, bg, preferred) {
+  const lum = c => {
+    ctx.fillStyle = "#000000";
+    ctx.fillStyle = c;
+    const hex = ctx.fillStyle;
+    if (!/^#[0-9a-f]{6}$/i.test(hex)) return null;
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    return 0.299 * r + 0.587 * g + 0.114 * b;
+  };
+  const lb = lum(bg), lp = lum(preferred);
+  if (lb == null || lp == null) return preferred;
+  if (Math.abs(lb - lp) >= 90) return preferred;
+  return lb > 150 ? "#202020" : "#FFFFFF";
 }
 
 // Pure bbox check against each text block drawn by compositeAd above —
