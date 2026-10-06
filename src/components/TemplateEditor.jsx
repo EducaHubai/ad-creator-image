@@ -262,6 +262,16 @@ export function TemplateEditor({ template, onChange, brand, previewRow = null })
               </>
             )}
 
+            {selected.type === "keep" && (
+              <>
+                <Row label="Forma">
+                  <Select value={selected.shape || "auto"} onChange={shape => set({ shape })} options={[["auto", "Automática (recorta el fondo)"], ["rounded", "Rectángulo redondeado"], ["ellipse", "Círculo / elipse"], ["rect", "Caja entera"]]} />
+                </Row>
+                {selected.shape === "rounded" && <Row label="Radio esquinas"><Num value={selected.radius} onChange={radius => set({ radius })} /></Row>}
+                <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>Automática detecta la forma por su color y no copia lo que hay detrás (p. ej. la foto vieja asomando por las esquinas). Si el badge es una foto o un degradado, elegí la forma a mano.</div>
+              </>
+            )}
+
             {selected.type === "logo" && (
               <Row label="Logo">
                 <Select value={selected.mode} onChange={mode => set({ mode })} options={[["keep", "Conservar el de la referencia"], ["brand", `Usar el logo de ${brand?.name || "la marca"}`]]} />

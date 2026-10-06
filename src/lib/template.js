@@ -70,6 +70,7 @@ export function newSlot(type, box, extra = {}) {
     radius: 0,
   });
   if (type === "logo") Object.assign(base, { mode: "keep" }); // keep | brand
+  if (type === "keep") Object.assign(base, { shape: "auto", radius: 0 }); // auto | rect | rounded | ellipse
   return { ...base, ...extra };
 }
 
@@ -280,13 +281,168 @@ function drawOverlay(ctx, slot) {
   ctx.restore();
 }
 
+// ─── KEEP MASKS ──────────────────────────────────────────────────────
+// Una zona "conservar" casi nunca es un rectángulo exacto: badges con
+// esquinas redondeadas, círculos, formas montadas sobre el borde de la foto.
+// Copiar la caja entera re-estampa también lo que hay detrás (la foto vieja
+// asomando por las esquinas). La máscara separa la forma de su fondo:
+// colores dominantes del centro de la caja → píxeles de esos colores
+// conectados al centro → se rellenan los huecos (texto o iconos dentro del
+// badge). Si el centro no es de color plano (p. ej. una foto), devuelve null
+// y se conserva la caja entera.
+const KEEP_TOL = 36;
+
+// `core` = zona de la que se toma el color de la forma (por defecto, la mitad
+// central de la imagen).
+export function keepMask({ data, width: w, height: h }, core = { x0: w * 0.25, y0: h * 0.25, x1: w * 0.75, y1: h * 0.75 }) {
+  const n = w * h;
+  if (n < 16) return null;
+  const cx0 = Math.floor(core.x0), cy0 = Math.floor(core.y0), cx1 = Math.ceil(core.x1), cy1 = Math.ceil(core.y1);
+  // Paleta: colores (cuantizados a 4 bits por canal) que ocupan ≥10% del
+  // núcleo.
+  const buckets = new Map();
+  let coreCount = 0;
+  for (let y = cy0; y < cy1; y++) {
+    for (let x = cx0; x < cx1; x++) {
+      const p = (y * w + x) * 4;
+      const key = (data[p] >> 4) << 8 | (data[p + 1] >> 4) << 4 | (data[p + 2] >> 4);
+      const b = buckets.get(key) || { c: 0, r: 0, g: 0, b: 0 };
+      b.c++; b.r += data[p]; b.g += data[p + 1]; b.b += data[p + 2];
+      buckets.set(key, b);
+      coreCount++;
+    }
+  }
+  const palette = [...buckets.values()].filter(b => b.c >= coreCount * 0.1)
+    .sort((a, b) => b.c - a.c).slice(0, 4);
+  if (palette.reduce((s, b) => s + b.c, 0) < coreCount * 0.5) return null;
+  const colors = palette.map(b => [b.r / b.c, b.g / b.c, b.b / b.c]);
+  const dist = i => {
+    let best = Infinity;
+    for (const c of colors) {
+      const d = (data[i * 4] - c[0]) ** 2 + (data[i * 4 + 1] - c[1]) ** 2 + (data[i * 4 + 2] - c[2]) ** 2;
+      if (d < best) best = d;
+    }
+    return Math.sqrt(best);
+  };
+
+  // Píxeles del color de la forma conectados al núcleo.
+  const shape = new Uint8Array(n);
+  const stack = [];
+  for (let y = cy0; y < cy1; y++) {
+    for (let x = cx0; x < cx1; x++) {
+      const i = y * w + x;
+      if (!shape[i] && dist(i) <= KEEP_TOL) { shape[i] = 1; stack.push(i); }
+    }
+  }
+  const flood = (mark, ok) => {
+    while (stack.length) {
+      const i = stack.pop(), x = i % w;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+        if (j >= 0 && j < n && !mark[j] && ok(j)) { mark[j] = 1; stack.push(j); }
+      }
+    }
+  };
+  flood(shape, j => dist(j) <= KEEP_TOL);
+
+  // Huecos: lo que no es forma y no se alcanza desde el borde de la caja
+  // (letras, iconos) pertenece al badge.
+  const outside = new Uint8Array(n);
+  const seed = i => { if (!shape[i] && !outside[i]) { outside[i] = 1; stack.push(i); } };
+  for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+  flood(outside, j => !shape[j]);
+
+  // Alfa: opaco dentro; el borde exterior (antialias de la forma mezclado
+  // con el fondo viejo) se desvanece según lo parecido que sea a la forma.
+  const alpha = new Uint8ClampedArray(n);
+  for (let i = 0; i < n; i++) {
+    if (!outside[i]) { alpha[i] = 255; continue; }
+    const x = i % w;
+    const touches = (x > 0 && !outside[i - 1]) || (x < w - 1 && !outside[i + 1]) || (i >= w && !outside[i - w]) || (i + w < n && !outside[i + w]);
+    if (touches) alpha[i] = Math.round(255 * Math.max(0, 1 - (dist(i) - KEEP_TOL) / (KEEP_TOL * 2)));
+  }
+  return alpha;
+}
+
+// Re-estampa una zona "conservar" de la referencia según su forma.
+function drawKeep(ctx, refCanvas, refCtx, s) {
+  const [x, y, w, h] = clampBox(refCtx, s.x, s.y, s.w, s.h);
+  const shape = s.shape || "auto";
+  if (shape === "rounded" || shape === "ellipse") {
+    ctx.save();
+    if (shape === "ellipse") { ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); }
+    else roundRectPath(ctx, x, y, w, h, s.radius || 0);
+    ctx.clip();
+    ctx.drawImage(refCanvas, x, y, w, h, x, y, w, h);
+    ctx.restore();
+    return;
+  }
+  if (shape === "rect") { ctx.drawImage(refCanvas, x, y, w, h, x, y, w, h); return; }
+  // Automática: se busca la forma también un poco fuera de la caja — si la
+  // caja quedó justa, la foto nueva le comería el borde a la forma.
+  const m = Math.max(4, Math.round(Math.min(w, h) * 0.12));
+  const [ex, ey, ew, eh] = clampBox(refCtx, x - m, y - m, w + m * 2, h + m * 2);
+  const img = refCtx.getImageData(ex, ey, ew, eh);
+  const alpha = keepMask(img, { x0: x - ex + w * 0.25, y0: y - ey + h * 0.25, x1: x - ex + w * 0.75, y1: y - ey + h * 0.75 });
+  if (!alpha) { ctx.drawImage(refCanvas, x, y, w, h, x, y, w, h); return; }
+  for (let i = 0; i < alpha.length; i++) img.data[i * 4 + 3] = alpha[i];
+  const tmp = document.createElement("canvas");
+  tmp.width = ew; tmp.height = eh;
+  tmp.getContext("2d").putImageData(img, 0, 0);
+  ctx.drawImage(tmp, ex, ey);
+}
+
+// ─── ERASE ───────────────────────────────────────────────────────────
+// Las cajas de texto suelen quedar justas sobre las mayúsculas: tildes (Á,
+// É), diéresis y descendentes (g, p, ,) se quedan fuera y, si solo se borra
+// la caja, sobreviven flotando junto al texto nuevo. Cada lado se agranda
+// mientras haya "tinta" (píxeles que no son el fondo) cerca, tolerando el
+// hueco entre la tilde y su letra, sin invadir otros slots.
+function inkBox(refCtx, slot, obstacles) {
+  const unit = Math.min(slot.h, (slot.maxSize || slot.h) * (slot.lineHeight || 1.15));
+  const reach = Math.max(3, Math.round(unit * 0.5));
+  const gap = Math.max(2, Math.round(unit * 0.2));
+  const W = refCtx.canvas.width, H = refCtx.canvas.height;
+  const bg = sampleEdges(refCtx, slot);
+  const rx = Math.max(0, slot.x - reach), ry = Math.max(0, slot.y - reach);
+  const rw = Math.min(W, slot.x + slot.w + reach) - rx, rh = Math.min(H, slot.y + slot.h + reach) - ry;
+  if (rw <= 0 || rh <= 0) return slot;
+  const { data } = refCtx.getImageData(rx, ry, rw, rh);
+  const ink = (x, y, c) => {
+    const p = ((y - ry) * rw + (x - rx)) * 4;
+    return Math.abs(data[p] - c[0]) + Math.abs(data[p + 1] - c[1]) + Math.abs(data[p + 2] - c[2]) > 96;
+  };
+  const blocked = (x0, x1, y0, y1) => obstacles.some(o => o.x < x1 && o.x + o.w > x0 && o.y < y1 && o.y + o.h > y0);
+  // Avanza desde `from` hacia `to` línea a línea; devuelve la última con tinta.
+  const grow = (from, to, lineHasInk, lineBlocked) => {
+    const step = to > from ? 1 : -1;
+    let last = from - step;
+    for (let v = from; v !== to + step; v += step) {
+      if (lineBlocked(v)) break;
+      if (lineHasInk(v)) last = v;
+      else if (Math.abs(v - last) > gap) break;
+    }
+    return last;
+  };
+  const x0 = Math.max(rx, slot.x), x1 = Math.min(rx + rw, slot.x + slot.w);
+  const rowInk = c => y => { for (let x = x0; x < x1; x++) if (ink(x, y, c)) return true; return false; };
+  // top/left inclusivos; bottom/right exclusivos.
+  const top = grow(slot.y - 1, ry, rowInk(bg.top), y => blocked(x0, x1, y, y + 1));
+  const bottom = grow(slot.y + slot.h, ry + rh - 1, rowInk(bg.bottom), y => blocked(x0, x1, y, y + 1)) + 1;
+  const colInk = c => x => { for (let y = top; y < bottom; y++) if (ink(x, y, c)) return true; return false; };
+  const left = grow(slot.x - 1, rx, colInk(bg.left), x => blocked(x, x + 1, top, bottom));
+  const right = grow(slot.x + slot.w, rx + rw - 1, colInk(bg.right), x => blocked(x, x + 1, top, bottom)) + 1;
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+
 // Tapa el contenido viejo del slot (texto/botón/logo de la referencia) con un
 // degradado vertical entre los colores de borde superior e inferior — empalma
 // con fondos lisos y con degradados suaves. Se agranda un poco para cubrir
 // el antialias de las letras viejas.
-function eraseSlot(ctx, refCtx, slot) {
+function eraseSlot(ctx, refCtx, slot, obstacles = null) {
   const pad = Math.round(Math.min(slot.w, slot.h) * 0.06);
-  const box = { x: slot.x - pad, y: slot.y - pad, w: slot.w + pad * 2, h: slot.h + pad * 2 };
+  const area = obstacles ? inkBox(refCtx, slot, obstacles) : slot;
+  const box = { x: area.x - pad, y: area.y - pad, w: area.w + pad * 2, h: area.h + pad * 2 };
   if (slot.erase && slot.erase.startsWith("#")) {
     ctx.fillStyle = slot.erase;
   } else {
@@ -345,10 +501,9 @@ export async function renderTemplate(template, { row = null, photoSrc = null, br
   }
 
   // 2) Zonas "conservar": se re-estampan los píxeles de la referencia
-  //    (badges, stickers, formas que la foto nueva habría tapado).
-  for (const s of slots.filter(s => s.type === "keep")) {
-    ctx.drawImage(refCanvas, s.x, s.y, s.w, s.h, s.x, s.y, s.w, s.h);
-  }
+  //    (badges, stickers, formas que la foto nueva habría tapado), recortados
+  //    a su forma para no traer de vuelta la foto vieja que tienen detrás.
+  for (const s of slots.filter(s => s.type === "keep")) drawKeep(ctx, refCanvas, refCtx, s);
 
   // 3) Textos, CTA y logo.
   for (const s of slots) {
@@ -356,7 +511,7 @@ export async function renderTemplate(template, { row = null, photoSrc = null, br
       const text = slotText(s, row);
       values[s.id] = text;
       const overPhoto = photos.some(p => within(s, p));
-      if (s.erase !== "none" && !overPhoto) eraseSlot(ctx, refCtx, s);
+      if (s.erase !== "none" && !overPhoto) eraseSlot(ctx, refCtx, s, slots.filter(o => o !== s));
       if (!text) continue;
       const family = await slotFamily(s, fonts);
       if (s.type === "cta") {
