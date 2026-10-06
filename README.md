@@ -12,9 +12,15 @@ los anuncios en todos los formatos con logo y tipografías de la marca.
 - **Server** (`server.js`, Express): sirve el build, proxya las llamadas LLM a
   LiteLLM (`POST /api/llm/chat`) y habla con Supabase usando la service key
   (`/api/db/*`, `/api/storage/*`). Mismo esquema que `course-cover-engine`.
-- **Modelos** (vía proxy LiteLLM): texto con Gemini 2.5 (selector en la barra
-  superior), imágenes con `gemini-3-pro-image` por chat/completions con
-  `modalities: ["image","text"]`.
+- **Modelos** (mismo catálogo que `course-cover-engine`): texto con
+  `gemini-3.5-flash-lite`; imagen a elegir entre `gemini-3-pro-image` (por
+  defecto), `gemini-3.1-flash-image` y `gpt-image-2.5-sunburst`.
+  - **Rápido**: todo vía LiteLLM — Gemini por chat/completions con
+    `modalities: ["image","text"]`, GPT Image por `/v1/images/generations`
+    (tamaño nativo por ratio, quality high).
+  - **Batch** (50% dto., asíncrono): Gemini por la Batch API nativa de Google
+    con `GEMINI_API_KEY`; GPT Image por la Batch API de OpenAI a través de
+    LiteLLM (managed batches, misma `LITELLM_API_KEY`).
 - **Persistencia**: Supabase (tablas `brands`/`batches`/`creatives` + buckets
   `creatives`/`brand-assets`). Migraciones en `supabase/migrations/`.
 
@@ -25,7 +31,7 @@ LITELLM_API_KEY=       # key virtual de LiteLLM
 LITELLM_BASE_URL=https://litellm-hel.hawkings.educaedtech.tools
 SUPABASE_URL=
 SUPABASE_SERVICE_KEY=  # service_role — solo la ve el server
-GEMINI_API_KEY=        # key nativa de AI Studio — habilita el modo Batch (50% dto.)
+GEMINI_API_KEY=        # key nativa de AI Studio — habilita el modo Batch con Gemini (50% dto.)
 APP_USER=              # opcional: Basic Auth delante de toda la app
 APP_PASSWORD=
 # PORT=3000

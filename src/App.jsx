@@ -255,9 +255,10 @@ async function callLLMChat(body, { timeoutMs = 120000 } = {}) {
   }, { label: body.model });
 }
 
-// Igual que callLLMChat pero contra la Images API (para gpt-image-1 y demás
-// modelos de imagen de OpenAI, que no pasan por chat/completions).
-async function callLLMImages(body, { timeoutMs = 120000 } = {}) {
+// Igual que callLLMChat pero contra la Images API (para gpt-image-2.5 y demás
+// modelos de imagen de OpenAI, que no pasan por chat/completions). Timeout
+// largo: Sunburst en quality high tarda bastante más que Gemini.
+async function callLLMImages(body, { timeoutMs = 300000 } = {}) {
   return withRetry(async () => {
     const res = await fetchWithTimeout("/api/llm/images", {
       method: "POST",
@@ -273,26 +274,36 @@ async function callLLMImages(body, { timeoutMs = 120000 } = {}) {
 }
 
 // ─── MODEL SELECTION ────────────────────────────────────────────────
-// Text and image models are user-selectable (dropdowns in the confirm step),
-// persisted in localStorage so they survive reloads. LiteLLM routes both by
-// name — no per-provider keys or URLs needed here.
+// Mismo catálogo que course-cover-engine. Text and image models are
+// user-selectable (dropdowns in the confirm step), persisted in localStorage
+// so they survive reloads; un id guardado que ya no exista vuelve al default.
+// En modo Rápido todo va por LiteLLM, que enruta por nombre.
 const TEXT_MODELS = [
-  { id: "gemini-2.5-flash",      label: "Gemini 2.5 Flash - Recomendado (mejor calidad/tokens)" },
-  { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite - Más rápido y económico (menor calidad)" },
-  { id: "gemini-2.5-pro",        label: "Gemini 2.5 Pro - Máxima calidad (5-10x más caro)" },
-  { id: "gemini-2.0-flash",      label: "Gemini 2.0 Flash - Generación anterior" },
+  { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash Lite - multimodal · rápido y económico" },
 ];
-const DEFAULT_TEXT_MODEL = "gemini-2.5-flash";
+const DEFAULT_TEXT_MODEL = TEXT_MODELS[0].id;
 const TEXT_MODEL_STORAGE_KEY = "adbatch_text_model";
 
 // Los modelos de Gemini van por chat/completions con modalities; los de OpenAI
 // (provider "openai") por la Images API. generateImage() bifurca según provider.
+// En Batch: Gemini por la Batch API nativa de Google (GEMINI_API_KEY) y OpenAI
+// por los managed batches de LiteLLM (misma LITELLM_API_KEY) — ver server.js.
+// usd / usdBatch: $ por imagen de referencia (los de course-cover-engine), no
+// una cotización en vivo.
 const IMAGE_MODELS = [
-  { id: "gemini-3-pro-image", label: "Gemini 3 Pro Image - Recomendado (nativo, cualquier ratio)", provider: "gemini" },
-  { id: "gpt-image-1",        label: "GPT Image 1 (OpenAI)", provider: "openai" },
+  { id: "gemini-3-pro-image",     label: "Gemini 3 Pro Image - Recomendado (máxima calidad)", provider: "gemini", usd: 0.134, usdBatch: 0.067 },
+  { id: "gemini-3.1-flash-image", label: "Gemini 3.1 Flash Image - Rápido y económico",       provider: "gemini", usd: 0.067, usdBatch: 0.034 },
+  { id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst (OpenAI) - Máxima calidad", provider: "openai", usd: 0.051, usdBatch: 0.026 },
 ];
-const DEFAULT_IMAGE_MODEL = "gemini-3-pro-image";
+const DEFAULT_IMAGE_MODEL = IMAGE_MODELS[0].id;
 const IMAGE_MODEL_STORAGE_KEY = "adbatch_image_model";
+const imageModelInfo = id => IMAGE_MODELS.find(m => m.id === id) || IMAGE_MODELS[0];
+
+// ¿Puede el server lanzar un Batch con este modelo? OpenAI va por LiteLLM;
+// Gemini necesita la key nativa de AI Studio.
+function batchAvailableFor(modelId) {
+  return imageModelInfo(modelId).provider === "openai" ? !!appConfig.hasLlmKey : !!appConfig.hasBatchKey;
+}
 const IMG_DELAY_MS = 2000;
 
 function getTextModel() {
@@ -632,11 +643,16 @@ function customDimToSize(dim) {
 // or variantCount — every format is compositeAd'd from the SAME generated
 // image, and variantCount only repeats the (much cheaper) copy/text call.
 // So: pilot flow = 5 (candidates) + 1 per remaining course; otherwise 1 per
-// course. pricePerImage is a rough per-image ballpark for gemini-3-pro-image
-// (mismo valor que usa course-cover-engine), not a live quote.
-function estimateBatchCost(courseCount, usePilotFlowEstimate, pricePerImage = 0.134) {
-  const imagesEstimate = usePilotFlowEstimate ? 5 + Math.max(0, courseCount - 1) : courseCount;
-  return { imagesEstimate, costEstimate: imagesEstimate * pricePerImage };
+// course. Los 5 candidatos del piloto van siempre en Rápido; el resto al
+// precio del modo elegido. Precios por imagen de IMAGE_MODELS (ballpark).
+function estimateBatchCost(courseCount, usePilotFlowEstimate, modelId = getImageModel(), imgMode = "rapid") {
+  const { usd, usdBatch } = imageModelInfo(modelId);
+  const restPrice = imgMode === "batch" ? usdBatch : usd;
+  if (usePilotFlowEstimate) {
+    const rest = Math.max(0, courseCount - 1);
+    return { imagesEstimate: 5 + rest, costEstimate: 5 * usd + rest * restPrice };
+  }
+  return { imagesEstimate: courseCount, costEstimate: courseCount * restPrice };
 }
 
 async function generateImagePrompt(brandConfig, courseData, research, copy) {
@@ -683,27 +699,33 @@ Specify: mood, lighting quality, composition, depth of field, photographic style
 // Used by the replicate path to test exact-fidelity reproduction of the
 // uploaded creative rather than relying only on the derived text analysis.
 //
-// gpt-image-1 solo acepta tamaños fijos (cuadrado/vertical/horizontal). El AR
-// se mapea al más cercano y compositeAd estira al w×h exacto del formato después.
-const GPT_IMAGE_SIZES = {
+// gpt-image-2.5 acepta cualquier tamaño con lados múltiplos de 16 y ratio
+// entre 1:3 y 3:1, así que cada AR se pide NATIVO (mismos tamaños que
+// course-cover-engine). Se usa tanto en Rápido como en Batch (el server no
+// tiene su propia tabla: recibe el size por item).
+const OPENAI_IMAGE_QUALITY = "high";
+const OPENAI_SIZE_FOR_AR = {
   "1:1":  "1024x1024",
-  "9:16": "1024x1536", "4:5": "1024x1536", "2:3": "1024x1536",
-  "16:9": "1536x1024", "3:2": "1536x1024",
+  "9:16": "864x1536", "4:5": "1024x1280", "2:3": "1024x1536",
+  "16:9": "1536x864", "3:2": "1536x1024",
 };
+const openaiSizeForAr = ar => OPENAI_SIZE_FOR_AR[ar] || "1024x1024";
 
 async function generateImage(prompt, aspectRatio, referenceImageDataUrl) {
   const modelId = getImageModel();
   const arHint = AR_HINTS[aspectRatio] || `${aspectRatio} aspect ratio`;
 
-  if (IMAGE_MODELS.find(m => m.id === modelId)?.provider === "openai") {
+  if (imageModelInfo(modelId).provider === "openai") {
     // OpenAI image models van por la Images API (no chat/completions): devuelven
-    // el PNG en data[0].b64_json. gpt-image-1 no admite response_format ni una
+    // el PNG en data[0].b64_json. gpt-image no admite response_format ni una
     // imagen de referencia por este endpoint, así que la ruta de replicar cae a
     // solo-texto (para fidelidad exacta desde una imagen, usa un modelo Gemini).
     const data = await callLLMImages({
       model: modelId,
-      prompt: `${prompt}\n\nComposition: ${arHint}.`,
-      size: GPT_IMAGE_SIZES[aspectRatio] || "1024x1024",
+      prompt,
+      size: openaiSizeForAr(aspectRatio),
+      quality: OPENAI_IMAGE_QUALITY,
+      output_format: "png",
       n: 1,
     });
     const b64 = data.data?.[0]?.b64_json;
@@ -1330,9 +1352,10 @@ function CodeChip({ children }) {
 
 // Selector Rápido/Batch para las imágenes (mismo patrón de course-cover-engine:
 // dos botones lado a lado, persistido en localStorage). "Batch" envía todas las
-// imágenes del lote a la Google Batch API con la GEMINI_API_KEY del server —
-// 50% más barato, asíncrono (normalmente 15min–2h). Solo disponible si el
-// server tiene la key (appConfig.hasBatchKey).
+// imágenes del lote de golpe — 50% más barato, asíncrono (normalmente
+// 15min–2h): los modelos Gemini por la Google Batch API con la GEMINI_API_KEY
+// del server, el de OpenAI por los managed batches de LiteLLM. Solo disponible
+// si el server puede con el modelo elegido (batchAvailableFor).
 const IMG_MODE_STORAGE_KEY = "adbatch_img_mode";
 
 function getImgMode() {
@@ -1341,11 +1364,14 @@ function getImgMode() {
     return m === "batch" ? "batch" : "rapid";
   } catch { return "rapid"; }
 }
+function setImgMode(id) {
+  try { localStorage.setItem(IMG_MODE_STORAGE_KEY, id); } catch { /* ignore */ }
+}
 
 // Lee la respuesta NDJSON en streaming de /api/batch/results, invocando onItem
 // por cada imagen a medida que llega (el payload completo puede ser enorme).
-async function readBatchResults(name, onItem) {
-  const res = await fetch(`/api/batch/results?name=${encodeURIComponent(name)}`);
+async function readBatchResults(name, model, onItem) {
+  const res = await fetch(`/api/batch/results?name=${encodeURIComponent(name)}&model=${encodeURIComponent(model)}`);
   if (!res.ok) throw new Error(`Batch results HTTP ${res.status}`);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -1368,19 +1394,20 @@ async function readBatchResults(name, onItem) {
   return summary;
 }
 
-function ImageModeSelect() {
+// Controlado por el paso de confirmación (Generate): la disponibilidad de
+// Batch depende del modelo de imagen elegido, y el coste estimado de ambos.
+function ImageModeSelect({ mode, onChange, imageModel }) {
   const T = useTheme();
-  const [mode, setMode] = useState(() => (appConfig.hasBatchKey ? getImgMode() : "rapid"));
-  const pick = id => {
-    setMode(id);
-    try { localStorage.setItem(IMG_MODE_STORAGE_KEY, id); } catch { /* ignore */ }
-  };
+  const isOpenAI = imageModelInfo(imageModel).provider === "openai";
   const modes = [
     { id: "rapid", label: "Rápido", detail: "Síncrono vía LiteLLM · ves cada imagen al generarse", hint: "Genera las imágenes una a una, en tiempo real." },
-    appConfig.hasBatchKey
-      ? { id: "batch", label: "Batch · 50% más barato", detail: "Asíncrono vía Google Batch API · normalmente 15min–2h", hint: "Envía todas las imágenes del lote de golpe. Mantén la pestaña abierta hasta que termine." }
-      : { id: "batch", label: "Batch · no disponible", detail: "Requiere GEMINI_API_KEY en el server", hint: "Configura GEMINI_API_KEY (Google AI Studio) en el entorno del server para activarlo.", disabled: true },
+    batchAvailableFor(imageModel)
+      ? { id: "batch", label: "Batch · 50% más barato", detail: `Asíncrono vía ${isOpenAI ? "LiteLLM (OpenAI Batch API)" : "Google Batch API"} · normalmente 15min–2h`, hint: "Envía todas las imágenes del lote de golpe. Mantén la pestaña abierta hasta que termine." }
+      : isOpenAI
+        ? { id: "batch", label: "Batch · no disponible", detail: "Requiere LiteLLM configurado en el server", hint: "Configura LITELLM_BASE_URL y LITELLM_API_KEY en el entorno del server.", disabled: true }
+        : { id: "batch", label: "Batch · no disponible", detail: "Requiere GEMINI_API_KEY en el server", hint: "Configura GEMINI_API_KEY (Google AI Studio) en el entorno del server para activarlo.", disabled: true },
   ];
+  const pick = onChange;
   return (
     <div style={{ marginBottom: 20 }}>
       <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Modo de generación de imágenes</label>
@@ -1434,28 +1461,29 @@ function TextModelSelect() {
 }
 
 // Selector del modelo de imagen — como el de texto, la elección se guarda en
-// localStorage y aplica globalmente vía getImageModel(). Solo afecta al modo
-// "Rápido" (LiteLLM); el modo Batch usa siempre el modelo Gemini del server.
-function ImageModelSelect() {
+// localStorage y aplica globalmente vía getImageModel(), en Rápido y en Batch.
+// Controlado por Generate (ver ImageModeSelect).
+function ImageModelSelect({ model, onChange }) {
   const T = useTheme();
-  const [model, setModel] = useState(getImageModel());
   return (
     <div style={{ marginBottom: 20 }}>
       <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Modelo de imagen</label>
       <select
         value={model}
-        onChange={e => { setModel(e.target.value); setImageModel(e.target.value); }}
+        onChange={e => onChange(e.target.value)}
         style={{
           width: "100%", fontSize: 13, color: T.text, background: T.card,
           border: `1px solid ${T.cardBorder}`, borderRadius: 10,
           padding: "10px 12px", cursor: "pointer",
         }}
       >
-        {IMAGE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+        {IMAGE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label} · ${m.usd.toFixed(3)}/img (Batch ${m.usdBatch.toFixed(3)})</option>)}
       </select>
-      <div style={{ fontSize: 11, color: T.textLight, marginTop: 6 }}>
-        Solo aplica al modo «Rápido». El modo Batch usa siempre Gemini.
-      </div>
+      {imageModelInfo(model).provider === "openai" && (
+        <div style={{ fontSize: 11, color: T.textLight, marginTop: 6 }}>
+          GPT Image no recibe la imagen de referencia: en «replicar» genera solo desde el texto.
+        </div>
+      )}
     </div>
   );
 }
@@ -2113,7 +2141,11 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
   // used to silently fall back to a 1080×1080 default at generation time.
   const hasFormats = cfg.formats.length > 0 || cfg.customDims.length > 0;
   const usePilotFlowEstimate = path !== "replicate" && hasApiKey() && cfg.courses.length > 0 && cfg.courses.some(c => c.keywords5?.length);
-  const { imagesEstimate, costEstimate } = estimateBatchCost(cfg.courses.length, usePilotFlowEstimate);
+  const [imageModel, setImageModelState] = useState(getImageModel);
+  const [imgModeChoice, setImgModeChoice] = useState(getImgMode);
+  // Un "batch" guardado no vale si el server no puede con el modelo actual.
+  const imgMode = imgModeChoice === "batch" && batchAvailableFor(imageModel) ? "batch" : "rapid";
+  const { imagesEstimate, costEstimate } = estimateBatchCost(cfg.courses.length, usePilotFlowEstimate, imageModel, imgMode);
   const [showCostConfirm, setShowCostConfirm] = useState(false);
 
   // Objetivo, audiencia, puntos de dolor y CTAs son opcionales — solo marca,
@@ -2497,8 +2529,8 @@ function Generate({ brands, onBatchCreated, onSaveBrand, path }) {
       </div>
 
       <TextModelSelect />
-      <ImageModelSelect />
-      <ImageModeSelect />
+      <ImageModelSelect model={imageModel} onChange={id => { setImageModelState(id); setImageModel(id); }} />
+      <ImageModeSelect mode={imgMode} imageModel={imageModel} onChange={id => { setImgModeChoice(id); setImgMode(id); }} />
 
       <div style={{ background: T.ctaDark, borderRadius: 12, padding: "20px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
@@ -2977,8 +3009,10 @@ function BatchProcessor({ batch, brands, onUpdate }) {
     }
 
     // Image generation (requires a LiteLLM key)
-    if (hasApiKey() && getImgMode() === "batch" && appConfig.hasBatchKey) {
-      // ── Modo Batch: Google Batch API (50% más barato, asíncrono) ─────────
+    const batchImageModel = getImageModel();
+    if (hasApiKey() && getImgMode() === "batch" && batchAvailableFor(batchImageModel)) {
+      // ── Modo Batch (50% más barato, asíncrono): Google Batch API para los
+      // modelos Gemini, managed batches de LiteLLM para el de OpenAI ────────
       // NOTA: a diferencia del Modo Rápido, acá /api/batch/submit solo manda
       // {prompt, aspectRatio} — no lleva la imagen de referencia real del
       // camino "replicate" (generateImage's referenceImageDataUrl). Mientras
@@ -3005,7 +3039,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
       if (jobs.length) {
         setPhase("batch-wait");
         setBatchWait({ done: 0, total: jobs.length, submittedAt: Date.now() });
-        // Chunks de ≤100 (límite de la Batch API para requests inline).
+        // Chunks de ≤100 (límite de la Batch API de Google para requests inline;
+        // el mismo tope para OpenAI acota el JSONL que pasa por el proxy).
         const chunks = [];
         for (let o = 0; o < jobs.length; o += 100) chunks.push(jobs.slice(o, o + 100));
         try {
@@ -3016,7 +3051,8 @@ function BatchProcessor({ batch, brands, onUpdate }) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 displayName: batch.name || "adbatch",
-                items: chunk.map(j => ({ id: String(j.courseIndex), prompt: j.imagePrompt, aspectRatio: primaryApiSize })),
+                model: batchImageModel,
+                items: chunk.map(j => ({ id: String(j.courseIndex), prompt: j.imagePrompt, aspectRatio: primaryApiSize, size: openaiSizeForAr(primaryApiSize) })),
               }),
             });
             const data = await res.json();
@@ -3029,7 +3065,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
             // Poll cada 30s hasta que el job termine.
             let state = "JOB_STATE_PENDING";
             while (!isCancelledRef.current) {
-              const res = await fetch(`/api/batch/status?name=${encodeURIComponent(job.name)}`);
+              const res = await fetch(`/api/batch/status?name=${encodeURIComponent(job.name)}&model=${encodeURIComponent(batchImageModel)}`);
               const st = await res.json().catch(() => ({}));
               if (res.ok) {
                 state = st.state;
@@ -3050,7 +3086,7 @@ function BatchProcessor({ batch, brands, onUpdate }) {
 
             // Resultados en streaming: compositar cada imagen según llega.
             const byIndex = new Map(job.chunk.map(j => [String(j.courseIndex), j]));
-            await readBatchResults(job.name, async ({ key, data, error }) => {
+            await readBatchResults(job.name, batchImageModel, async ({ key, data, error }) => {
               const j = byIndex.get(String(key));
               if (!j) return;
               await waitIfPaused();
