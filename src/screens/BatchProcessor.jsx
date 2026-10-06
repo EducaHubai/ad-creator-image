@@ -8,7 +8,8 @@ import { FORMAT_SIZES, customDimToSize, parseCustomDim } from "../lib/formats.js
 import { generateImage, generateImagePrompt, openaiSizeForAr } from "../lib/imageGen.js";
 import { hasApiKey } from "../lib/llm.js";
 import { IMG_DELAY_MS, batchAvailableFor, getImageModel, getImgMode } from "../lib/models.js";
-import { renderTemplateRow, resolveTemplate } from "../lib/templatePipeline.js";
+import { batchTemplates, generateTemplatePhoto, renderTemplateRow, resolveTemplate } from "../lib/templatePipeline.js";
+import { photoKey } from "../lib/templateSets.js";
 import { FALLBACK_STYLE_VARIANTS, buildStyleVariantPrompt, generateStyleDirections } from "../lib/styleDirections.js";
 import { BUCKETS, createBatch, fetchBatch, fetchCreatives, getSignedUrl, insertCreative, updateBatch, uploadFile } from "../lib/supabase";
 import { useTheme } from "../theme/tokens.js";
@@ -52,15 +53,16 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
   // necesita al retomar (replicateStyleDescriptor, refImageDescriptor,
   // winningDirection) sí se conservan; courses vive en su columna propia.
   function persistableConfig(config = {}) {
-    const { replicateImage, refImages, csvText, courses, template, ...rest } = config;
+    const { replicateImage, refImages, csvText, courses, template, templates, ...rest } = config;
     void csvText; void courses;
     return {
       ...rest,
       replicateImage: replicateImage ? { name: replicateImage.name } : null,
       refImagesCount: refImages?.length || 0,
-      // La plantilla viaja sin la referencia embebida (data URL de MBs): se
-      // recupera de storage vía referencePath al retomar.
+      // Las plantillas viajan sin la referencia embebida (data URL de MBs): se
+      // recuperan de storage vía referencePath al retomar.
       ...(template ? { template: { ...template, referenceData: undefined } } : {}),
+      ...(templates ? { templates: templates.map(t => ({ ...t, referenceData: undefined })) } : {}),
     };
   }
 
@@ -244,16 +246,21 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
   }, [runKey]);
 
   // Camino plantilla (replicate v2): sin investigación ni copy por IA — los
-  // textos salen del CSV; por fila solo se genera la foto y se renderiza.
+  // textos salen del CSV; por fila se generan las fotos y se renderiza cada
+  // plantilla de cada resolución marcada (fila × plantillas anuncios).
   async function runTemplatePipeline() {
     const courses = batch.config.courses || [];
     const total = courses.length;
-    const template = await resolveTemplate(batch.config.template);
-    const referenceImg = await loadImage(template.referenceData);
-    if (!referenceImg) throw new Error("No se pudo cargar la imagen de referencia de la plantilla");
-    const fmtKey = `${template.width}x${template.height}`;
-    const fmt = { w: template.width, h: template.height };
+    const templates = await Promise.all(batchTemplates(batch.config).map(async t => {
+      const resolved = await resolveTemplate(t);
+      const referenceImg = await loadImage(resolved.referenceData);
+      if (!referenceImg) throw new Error(`No se pudo cargar la referencia de la plantilla ${t.outLabel}`);
+      return { template: resolved, referenceImg };
+    }));
+    if (!templates.length) throw new Error("El lote no tiene plantillas");
+    const sharePhoto = batch.config.sharePhoto !== false;
     const generatePhoto = hasApiKey();
+    const steps = total * templates.length;
 
     await persistBatchStart();
     const resume = resumeStateRef.current;
@@ -269,25 +276,52 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
         continue;
       }
       const c = courses[i];
-      setItems(prev => [...prev, { ...c, status: "imaging" }]);
-      try {
-        const r = await renderTemplateRow(template, c.row || {}, { brand, referenceImg, generatePhoto });
+      const row = c.row || {};
+      results[i] = { ...c, status: "imaging", copies: [], composited: {}, qaIssues: {} };
+      setItems(prev => [...prev, results[i]]);
+      // Fotos de esta fila, por proporción (o por plantilla si no se comparten).
+      const photos = {};
+      const errors = [];
+      for (let j = 0; j < templates.length; j++) {
+        await waitIfPaused();
         if (isCancelledRef.current) return;
-        results[i] = { ...c, status: "imaged", copies: [r.copy], imagePrompt: r.imagePrompt, composited: { [fmtKey]: r.dataUrl }, qaIssues: { [fmtKey]: r.qaIssues } };
-        persistCreative(i, results[i], r.copy, r.imagePrompt, fmtKey, fmt, r.dataUrl);
-        persistBatchProgress(i);
-      } catch (err) {
-        results[i] = { ...c, status: "imageFailed", imageError: err.message };
+        const { template, referenceImg } = templates[j];
+        const fmt = { w: template.outW, h: template.outH };
+        try {
+          const key = generatePhoto ? photoKey(template, sharePhoto) : null;
+          if (key && !(key in photos)) {
+            photos[key] = generateTemplatePhoto(template, row, referenceImg);
+            await photos[key];
+            if (j < templates.length - 1) await new Promise(r => setTimeout(r, IMG_DELAY_MS));
+          }
+          const photo = key ? await photos[key] : null;
+          const r = await renderTemplateRow(template, row, { brand, referenceImg, photo });
+          if (isCancelledRef.current) return;
+          results[i] = {
+            ...results[i],
+            copies: results[i].copies.length ? results[i].copies : [r.copy],
+            imagePrompt: results[i].imagePrompt || r.imagePrompt,
+            composited: { ...results[i].composited, [template.outLabel]: r.dataUrl },
+            qaIssues: { ...results[i].qaIssues, [template.outLabel]: r.qaIssues },
+          };
+          persistCreative(i, results[i], r.copy, r.imagePrompt, template.outLabel, fmt, r.dataUrl);
+        } catch (err) {
+          errors.push(`${template.outLabel}: ${err.message}`);
+        }
+        setItems(prev => prev.map((it, idx) => idx === i ? results[i] : it));
+        setProgress(Math.round(((i * templates.length + j + 1) / steps) * 100));
       }
+      const anyDone = Object.keys(results[i].composited).length > 0;
+      results[i] = { ...results[i], status: anyDone ? "imaged" : "imageFailed", ...(errors.length ? { imageError: errors.join(" · ") } : {}) };
+      if (anyDone) persistBatchProgress(i);
       setItems(prev => prev.map((it, idx) => idx === i ? results[i] : it));
-      setProgress(Math.round(((i + 1) / total) * 100));
       if (generatePhoto && i < total - 1) await new Promise(r => setTimeout(r, IMG_DELAY_MS));
     }
 
     setCtrl("done");
     setPhase("done");
     setProgress(100);
-    const finalAdsCount = results.filter(r => r?.status === "imaged").length;
+    const finalAdsCount = results.reduce((n, r) => n + Object.keys(r?.composited || {}).length, 0);
     onUpdate(batch.id, { status: "review", adsCount: finalAdsCount, items: results });
     persistBatchEnd("done", { ads_count: finalAdsCount });
   }
@@ -656,6 +690,8 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
     persistBatchEnd("done", { ads_count: finalAdsCount });
   }
 
+  const isTemplatePath = batch.config.path === "template";
+  const templateCount = isTemplatePath ? batchTemplates(batch.config).length : 0;
   const done = items.filter(it => ["generated","imaged","imageFailed","researchFailed","copyFailed"].includes(it.status)).length;
   // Colecciones para el visor: candidatos piloto con imagen y filas ya
   // compuestas — permiten ampliar/navegar sin interferir con la selección.
@@ -800,7 +836,9 @@ export function BatchProcessor({ batch, brands, onUpdate }) {
           const dotBg = isImaged ? T.teal : isFailed ? T.coral : isImaging ? T.blueMid : isGenerated ? T.accent : isResearching ? T.blueMid : T.cardBorder;
           const firstThumb = it.composited ? Object.values(it.composited)[0] : null;
           const failMsg = it.status === "researchFailed" ? it.researchError : it.status === "copyFailed" ? it.copyError : it.imageError;
-          const statusLabel = isImaged ? "Imagen lista" : isFailed ? `Error: ${failMsg?.slice(0,40)}` : isImaging ? "Generando imagen…" : isGenerated ? "Copy listo" : it.status === "researched" ? "Investigado" : isResearching ? "Investigando…" : "En cola";
+          const nDone = Object.keys(it.composited || {}).length;
+          const perRow = isTemplatePath ? `${nDone}/${templateCount}` : "";
+          const statusLabel = isImaged ? (perRow ? `${perRow} listas${it.imageError ? ` · error: ${it.imageError.slice(0, 40)}` : ""}` : "Imagen lista") : isFailed ? `Error: ${failMsg?.slice(0,40)}` : isImaging ? `Generando imagen…${perRow ? ` ${perRow}` : ""}` : isGenerated ? "Copy listo" : it.status === "researched" ? "Investigado" : isResearching ? "Investigando…" : "En cola";
           return (
             <div key={i} style={{ display: "flex", alignItems: "center", padding: "10px 18px", borderBottom: i < items.length - 1 ? `1px solid ${T.cardBorder}` : "none", gap: 12 }}>
               <div style={{ width: 16, height: 16, borderRadius: "50%", background: dotBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>

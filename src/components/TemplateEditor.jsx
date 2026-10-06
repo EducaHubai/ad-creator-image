@@ -210,6 +210,11 @@ export function TemplateEditor({ template, onChange, brand, previewRow = null })
 
             {isText && (
               <>
+                {selected.type === "text" && (
+                  <Row label="Rol">
+                    <Select value={selected.role || "other"} onChange={role => set({ role })} options={[["headline", "Título"], ["subheadline", "Subtítulo"], ["body", "Descripción"], ["price", "Precio"], ["tag", "Etiqueta"], ["other", "Otro"]]} />
+                  </Row>
+                )}
                 {selected.sampleText && <Row label="Texto original"><span style={{ fontSize: 11, color: T.textMuted, fontStyle: "italic" }}>"{selected.sampleText}"</span></Row>}
                 <Row label="Fuente">
                   <Select value={selected.font} onChange={font => set({ font })} options={[["display", `Display de marca${brand?.fonts?.display ? ` (${brand.fonts.display})` : ""}`], ["body", `Texto de marca${brand?.fonts?.body ? ` (${brand.fonts.body})` : ""}`]]} />
